@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #16202c;
+  --color-ink-2: #4a5a6a;
+  --color-ink-3: #7a8896;
+  --color-line: #e2e8ef;
+  --color-shell: #f5f7fa;
+  --color-brand: #1f3a5f;
+  --color-brand-2: #2c5282;
+  --color-accent: #0f766e;
+
+  --color-ok-bg: #e7f6ec;
+  --color-ok-fg: #1a7f43;
+  --color-warn-bg: #fff4d6;
+  --color-warn-fg: #946200;
+  --color-bad-bg: #fde7e7;
+  --color-bad-fg: #b02a2a;
+  --color-info-bg: #eaf2fb;
+  --color-info-fg: #1f4e8c;
+  --color-mute-bg: #f1f3f6;
+  --color-mute-fg: #6b7683;
+}
+
+@layer base {
+  html,
+  body {
+    background: var(--color-shell);
+    color: var(--color-ink);
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+  }
+
+  table {
+    border-collapse: collapse;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-[var(--color-line)] bg-white p-5;
+  }
+
+  .card-title {
+    @apply mb-3 text-xs font-bold uppercase tracking-wide text-[var(--color-ink-2)];
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center rounded-lg bg-[var(--color-brand)] px-4 py-2
+      text-sm font-semibold text-white transition-colors hover:bg-[var(--color-brand-2)]
+      disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center rounded-lg border border-[var(--color-line)]
+      bg-white px-4 py-2 text-sm font-semibold text-[var(--color-brand)] transition-colors
+      hover:bg-[var(--color-info-bg)];
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center rounded-lg border border-[#f0c9c9] bg-white
+      px-3 py-1.5 text-xs font-semibold text-[var(--color-bad-fg)] hover:bg-[var(--color-bad-bg)];
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  .field-label {
+    @apply mb-1 block text-xs font-semibold text-[var(--color-ink-2)];
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-[var(--color-line)] bg-white px-3 py-2 text-sm
+      text-[var(--color-ink)] outline-none focus:border-[#a9c6e8] focus:ring-2 focus:ring-[#cfe0f5];
+  }
+
+  .chip {
+    @apply inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-bold;
+  }
+
+  .kpi {
+    @apply rounded-xl border border-[var(--color-line)] bg-white px-4 py-3;
+  }
+
+  .kpi-n {
+    @apply text-2xl font-bold tracking-tight;
+  }
+
+  .kpi-l {
+    @apply mt-0.5 text-xs text-[var(--color-ink-3)];
+  }
+
+  .tablewrap {
+    @apply overflow-x-auto rounded-xl border border-[var(--color-line)] bg-white;
+  }
+
+  .link {
+    @apply font-medium text-[var(--color-brand-2)] hover:underline;
+  }
+
+  .banner {
+    @apply rounded-lg border px-4 py-3 text-sm;
+  }
+}

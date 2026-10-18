@@ -1,0 +1,272 @@
+// Finance Reports — Pacific Surfaces
+//
+// Customer payment tracking as a standalone application: customers, invoices,
+// receipts, credit/debit notes, the correction history, the uploaded sheets,
+// and the rules and settings the calculations use.
+//
+// Local-first: a SQLite file, no Docker, no database server to install.
+// Every table keeps the `pt_` prefix it had inside the Accounts ERP, so the
+// data carried over from that project is read as it is.
+//
+// Almost every column is nullable. A record can be saved with whatever is known
+// now and completed later; what cannot be calculated from what is present is
+// reported as *requiring verification*, never guessed.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model PtCustomer {
+  id   String  @id @default(cuid())
+  name String?
+
+  country             String?
+  currency            String?
+  defaultPaymentTerms String?
+  consignee           String?
+  notifyParty         String?
+  contact             String?
+  notes               String?
+
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  invoices PtInvoice[]
+  edits    PtFieldEdit[]
+
+  @@index([name])
+  @@map("pt_customers")
+}
+
+model PtInvoice {
+  id String @id @default(cuid())
+
+  /// Nullable: an invoice can be entered before anyone says whose it is, and
+  /// those are grouped under "No customer recorded" rather than refused.
+  customerId String?
+  customer   PtCustomer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  invoiceNo            String?
+  invoiceDate          DateTime?
+  customerInvoiceValue Float?
+  /// The customs / as-per-books value, where it differs from the customer's.
+  customsInvoiceValue  Float?
+  /// Home currency per one unit of foreign currency, on the invoice date.
+  exchangeRate         Float?
+  currency             String?
+  consignee            String?
+  notifyParty          String?
+  country              String?
+
+  paymentTerms String?
+  /// A due date typed in or taken from a sheet. Used in preference to the
+  /// calculated one, and always labelled as unverifiable, because the basis it
+  /// came from is not recorded.
+  enteredDueDate DateTime?
+
+  piNo             String?
+  poNo             String?
+  shippingBillNo   String?
+  shippingBillDate DateTime?
+  blNo             String?
+  blDate           DateTime?
+  containerNo      String?
+  eta              DateTime?
+  /// When the documents were presented to the bank. The basis a CAD term needs,
+  /// and the one no outstanding sheet records.
+  docsPresentedDate DateTime?
+
+  /// Balance as per books, entered from the books. Never part of the
+  /// outstanding calculation — it already has its own receipts applied, so
+  /// subtracting ours again would count them twice. Held beside the calculated
+  /// figure so the difference between them can be reported.
+  booksBalance Float?
+
+  remarks       String?
+  followUpNotes String?
+
+  /// MANUAL | EXCEL
+  source     String  @default("MANUAL")
+  sourceFile String?
+  sourceRow  Int?
+  /// The position date of the sheet this came from.
+  sourceAsOn DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  receipts PtReceipt[]
+  notes    PtNote[]
+  edits    PtFieldEdit[]
+
+  @@index([customerId])
+  @@index([invoiceNo])
+  @@index([poNo])
+  @@index([invoiceDate])
+  @@map("pt_invoices")
+}
+
+/// One receipt against one invoice. No limit, and no unique constraint on seq,
+/// so Add Receipt can always add another.
+model PtReceipt {
+  id        String    @id @default(cuid())
+  invoiceId String
+  invoice   PtInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  seq         Int       @default(1)
+  receiptDate DateTime?
+  /// Amount received in the invoice's own currency.
+  amountFcy   Float?
+  /// Home currency per one unit of foreign currency, on the day it arrived.
+  exchangeRate Float?
+  bankRef      String?
+  remarks      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([invoiceId])
+  @@map("pt_receipts")
+}
+
+model PtNote {
+  id        String    @id @default(cuid())
+  invoiceId String
+  invoice   PtInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  /// CREDIT | DEBIT
+  noteType String    @default("CREDIT")
+  noteNo   String?
+  noteDate DateTime?
+  amount   Float?
+  reason   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([invoiceId])
+  @@map("pt_notes")
+}
+
+/// One change to one field, whatever kind of record it was on.
+///
+/// Every write in this section goes through `recordEdits`, so an imported figure
+/// that somebody corrected by hand can always be told apart from one the sheet
+/// supplied — and `recordSource` says which kind of record it was, so the screen
+/// can report "the uploaded sheet said 26,756.27" beside a hand-typed figure.
+///
+/// Deliberately one table for all four record kinds rather than four tables:
+/// an invoice's history has to read as one list, and a receipt or a note is part
+/// of its invoice's story, not a separate one.
+model PtFieldEdit {
+  id String @id @default(cuid())
+
+  /// INVOICE | RECEIPT | NOTE | CUSTOMER
+  entity   String
+  /// The id of that record. Kept even for a receipt or note that is later
+  /// deleted, so the history does not develop holes.
+  entityId String
+
+  /// The invoice this change belongs to, where there is one — an invoice's own
+  /// fields, its receipts' and its notes' all carry the same invoiceId.
+  invoiceId String?
+  invoice   PtInvoice? @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  customerId String?
+  customer   PtCustomer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  fieldKey String
+  /// The field's name as the form shows it, stored so the history stays readable
+  /// after a label is reworded.
+  label    String?
+  oldValue String?
+  newValue String?
+
+  /// MANUAL | EXCEL — where the record itself came from, at the time of the
+  /// edit. This is what lets an imported value be identified as overwritten.
+  recordSource String?
+
+  editedBy  String   @default("Accounts")
+  createdAt DateTime @default(now())
+
+  @@index([invoiceId])
+  @@index([customerId])
+  @@index([entity, entityId])
+  @@map("pt_field_edits")
+}
+
+/// One upload of one customer sheet, with the file, so an import can always be
+/// explained and re-run.
+model PtImport {
+  id        String @id @default(cuid())
+  fileName  String
+  sheetName String
+  sha256    String
+
+  customerName String?
+  /// The date the figures are as at, and where it was found: a cell, the tab
+  /// name, a block caption, or a TODAY() formula — which means the sheet had no
+  /// fixed position date at all.
+  asOn       DateTime?
+  asOnSource String?
+
+  currency       String?
+  currencySource String?
+
+  rowsRead  Int @default(0)
+  created   Int @default(0)
+  updated   Int @default(0)
+  skipped   Int @default(0)
+
+  /// JSON: the column mapping used, per-row changes, duplicates and warnings.
+  report   String @default("{}")
+  warnings String @default("[]")
+
+  content   Bytes
+  createdAt DateTime @default(now())
+
+  @@index([customerName])
+  @@index([sha256])
+  @@map("pt_imports")
+}
+
+
+/// A payment-term wording the business has defined itself.
+///
+/// Checked before the built-in readings, so a wording the system does not
+/// understand — or understands differently from how a customer applies it — can
+/// be given its exact meaning once, and every invoice carrying it, every
+/// dashboard figure and every export follows.
+model PtTermRule {
+  id        String @id @default(cuid())
+  /// A short name for the rule, e.g. "Terry Stone standard".
+  name      String
+  /// The wording to recognise.
+  matchText String
+  /// EXACT — the whole wording, ignoring case and spacing; CONTAINS — anywhere in it.
+  matchMode String @default("EXACT")
+  /// JSON: [{ "percent": 70, "days": 0, "basis": "DOCS_PRESENTED" }, …], adding up to 100.
+  milestones String @default("[]")
+  active     Boolean @default(true)
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("pt_term_rules")
+}
+
+/// The adjustable thresholds the status and attention rules use.
+model PtSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("pt_settings")
+}

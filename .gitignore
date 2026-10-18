@@ -1,0 +1,15 @@
+node_modules/
+.next/
+out/
+build/
+.env
+.env.local
+*.tsbuildinfo
+next-env.d.ts
+coverage/
+
+# Local SQLite database (your live payment data)
+prisma/*.db
+prisma/*.db-journal
+*.db
+*.db-journal
