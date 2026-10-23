@@ -11,7 +11,7 @@
  */
 import Link from "next/link";
 
-import { CustomerSummary } from "@/components/tracking/CustomerSummary";
+import { CustomerSummary, isSummarySort } from "@/components/tracking/CustomerSummary";
 import { AgeingSummary, Dashboard } from "@/components/tracking/Dashboard";
 import { MasterTable } from "@/components/tracking/MasterTable";
 import { AttentionStrip, asAtTime, OverviewHead, type AttentionItem } from "@/components/tracking/Overview";
@@ -41,7 +41,10 @@ export default async function DashboardPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const filters = filtersFrom(await searchParams);
+  const sp = await searchParams;
+  const filters = filtersFrom(sp);
+  // the customer-wise summary's own order, kept apart from the filters
+  const csort = isSummarySort(sp.csort) ? sp.csort : "outstanding";
   const { invoices, onAccount: allOnAccount, params, today, counts, options } = await loadTracking();
 
   const visible = filterInvoices(invoices, filters);
@@ -130,7 +133,12 @@ export default async function DashboardPage({
 
           <CustomerSummary
             customers={customers}
-            returnTo={`${ROUTES.dashboard}${query ? `?${query}` : ""}#customers`}
+            today={today}
+            sort={{
+              value: csort,
+              keep: Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) as Record<string, string>,
+            }}
+            returnTo={`${ROUTES.dashboard}?${toQuery(filters, csort !== "outstanding" ? { csort } : {})}#customers`}
           />
 
           <AgeingSummary kpis={kpis} filters={filters} invoices={visible} customers={customers} today={today} />
@@ -143,11 +151,16 @@ export default async function DashboardPage({
             </Banner>
           )}
 
-          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-[var(--color-ink-2)]">
-              Master table
-            </h2>
-            <p className="text-[11px] text-[var(--color-ink-3)]">
+          {/* where the table begins, set apart so nobody scrolls past it */}
+          <div className="mb-5 mt-10 scroll-mt-4 text-center" id="master-table">
+            <div className="flex items-center gap-4">
+              <span className="h-px flex-1 bg-gradient-to-r from-transparent to-[#c9d6e3]" aria-hidden />
+              <h2 className="text-[26px] font-bold tracking-tight text-[var(--color-brand)] sm:text-[30px]">
+                Master Table
+              </h2>
+              <span className="h-px flex-1 bg-gradient-to-l from-transparent to-[#c9d6e3]" aria-hidden />
+            </div>
+            <p className="mt-1.5 text-[12px] text-[var(--color-ink-3)]">
               {visible.length} invoice(s) · {counts.customers} customer(s) · {counts.receipts}{" "}
               receipt(s) · {counts.fromExcel} imported, {counts.manual} entered · click a customer&rsquo;s
               name to adjust its payments

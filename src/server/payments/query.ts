@@ -31,6 +31,7 @@ import {
   type TrackingParams,
   type TrackingStatus,
 } from "@/lib/payments/record";
+import { customerStanding, type Standing } from "@/lib/payments/standing";
 import { readTerm, type TermRule } from "@/lib/payments/terms";
 import { formatMoney } from "@/lib/money";
 import { round2, todayIso } from "@/lib/text";
@@ -54,6 +55,14 @@ export interface CustomerSummary {
   collectedPct: number;
   /** How many of this customer's invoices have a due date at all. */
   dueDatesKnown: number;
+  /** Invoices still owing money. */
+  openInvoices: number;
+  /** Invoices with a portion past its due date. */
+  overdueInvoices: number;
+  /** Open invoices with no due date — the ones nobody can call late or on time. */
+  openWithoutDueDate: number;
+  /** Where the customer stands, in one word — see `customerStanding`. */
+  paymentStatus: Standing;
   needsAttention: number;
   oldestDue: string | null;
   statuses: Partial<Record<TrackingStatus, number>>;
@@ -379,6 +388,10 @@ export function summarise(
     overdue: 0,
     collectedPct: 0,
     dueDatesKnown: 0,
+    openInvoices: 0,
+    overdueInvoices: 0,
+    openWithoutDueDate: 0,
+    paymentStatus: "PAID",
     needsAttention: 0,
     oldestDue: null,
     statuses: {} as Partial<Record<TrackingStatus, number>>,
@@ -402,6 +415,11 @@ export function summarise(
     g.outstanding = round2(g.outstanding + (i.money.calculatedOutstanding ?? 0));
     g.overdue = round2(g.overdue + i.schedule.overdueAmount);
     if (i.schedule.dueDate) g.dueDatesKnown += 1;
+    if ((i.money.calculatedOutstanding ?? 0) > 0.01) {
+      g.openInvoices += 1;
+      if (!i.schedule.dueDate) g.openWithoutDueDate += 1;
+    }
+    if (i.schedule.overdueAmount > 0.01) g.overdueInvoices += 1;
     if (i.needsAttention) g.needsAttention += 1;
     g.statuses[i.status] = (g.statuses[i.status] ?? 0) + 1;
     if (
@@ -426,6 +444,7 @@ export function summarise(
   for (const g of groups.values()) {
     g.collectedPct = g.invoiceValue > 0 ? Math.round((g.received / g.invoiceValue) * 1000) / 10 : 0;
     g.netOutstanding = round2(g.outstanding - g.onAccount);
+    g.paymentStatus = customerStanding(g);
   }
 
   return [...groups.values()].sort((a, b) => b.outstanding - a.outstanding);

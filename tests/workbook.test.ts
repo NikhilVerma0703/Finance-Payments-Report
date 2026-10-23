@@ -106,4 +106,20 @@ describe("the report workbook", () => {
     expect(csv.split("\r\n").filter(Boolean)).toHaveLength(4);
     expect(csv).toContain("PS/1,Alpha");
   });
+  it("numbers the customer summary and gives each row its payment status, as the screen does", async () => {
+    const ws = (await load()).getWorksheet("Customer Summary")!;
+    let at = 0;
+    for (let r = 1; r <= 12 && !at; r += 1) if (ws.getRow(r).getCell(1).value === "S. No.") at = r;
+    expect(at).toBeGreaterThan(0);
+    const h = headings(ws, at);
+    expect(h.slice(0, 7)).toEqual([
+      "S. No.", "Customer", "Currency", "Total Invoices", "Invoice Value", "Total Received", "Collected %",
+    ]);
+    expect(h).toContain("Outstanding Balance");
+    expect(h).toContain("Overdue Amount");
+    const status = h.indexOf("Payment Status") + 1;
+    expect(status).toBeGreaterThan(0);
+    expect(ws.getRow(at + 1).getCell(1).value).toBe(1);
+    expect(String(ws.getRow(at + 1).getCell(status).value)).toMatch(/\w/);
+  });
 });

@@ -15,6 +15,7 @@ import ExcelJS from "exceljs";
 
 import { ageingSummary, ageingOrder } from "@/lib/payments/ageing";
 import { STATUS_LABELS, STATUS_TONE, type TrackedInvoice, type TrackingParams } from "@/lib/payments/record";
+import { STANDING_LABELS } from "@/lib/payments/standing";
 import { BASIS_LABELS } from "@/lib/payments/terms";
 import { round2 } from "@/lib/text";
 import { HOME_CURRENCY, toHome } from "@/lib/money";
@@ -461,17 +462,20 @@ export async function buildReportWorkbook(
 
   // ======================================================== Customer summary
   const order = ageingOrder(args.params.ageingBuckets);
+  // the same columns, in the same order and words, as the screen's table
   const cc: Column[] = [
+    { key: "sno", label: "S. No.", kind: "int", group: "Customer" },
     { key: "customer", label: "Customer", kind: "text", group: "Customer" },
     { key: "currency", label: "Currency", kind: "text", group: "Customer" },
-    { key: "invoices", label: "Invoices", kind: "int", group: "Totals" },
-    { key: "value", label: "Invoiced", kind: "money", group: "Totals" },
-    { key: "received", label: "Received", kind: "money", group: "Totals" },
+    { key: "invoices", label: "Total Invoices", kind: "int", group: "Totals" },
+    { key: "value", label: "Invoice Value", kind: "money", group: "Totals" },
+    { key: "received", label: "Total Received", kind: "money", group: "Totals" },
     { key: "collected", label: "Collected %", kind: "pct", group: "Totals" },
     { key: "cn", label: "CN", kind: "money", group: "Totals" },
     { key: "dn", label: "DN", kind: "money", group: "Totals" },
-    { key: "outstanding", label: "Outstanding", kind: "money", group: "Totals" },
-    { key: "overdue", label: "Overdue", kind: "money", group: "Totals" },
+    { key: "outstanding", label: "Outstanding Balance", kind: "money", group: "Totals" },
+    { key: "overdue", label: "Overdue Amount", kind: "money", group: "Totals" },
+    { key: "status", label: "Payment Status", kind: "text", group: "Totals" },
     { key: "nil", label: "Nothing Received (invoices)", kind: "int", group: "Totals" },
     ...order.map((label, i) => ({
       key: `a${i}`,
@@ -480,13 +484,14 @@ export async function buildReportWorkbook(
       group: "Outstanding by ageing",
     })),
   ];
-  const custRows: Row[] = summarise(rows).map((c) => {
+  const custRows: Row[] = summarise(rows).map((c, n) => {
     const list = rows.filter(
       (i) => (i.customerId ?? null) === c.id && (i.currency ?? "—") === c.currency,
     );
     const a = ageingSummary(list, args.params.ageingBuckets);
     const out: Row = {
       __currency: c.currency,
+      sno: n + 1,
       customer: c.name,
       currency: c.currency,
       invoices: c.invoices,
@@ -497,6 +502,7 @@ export async function buildReportWorkbook(
       dn: sum(list, (i) => i.money.debitNotes),
       outstanding: c.outstanding,
       overdue: c.overdue,
+      status: STANDING_LABELS[c.paymentStatus],
       nil: a.nothingReceived.count,
     };
     a.buckets.forEach((b, i) => (out[`a${i}`] = b.amount));
@@ -528,7 +534,7 @@ export async function buildReportWorkbook(
     cc,
     custRows,
     custTotals,
-    1,
+    2,
   );
 
   // ======================================================== Ageing summary
