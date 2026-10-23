@@ -16,6 +16,7 @@
 import Link from "next/link";
 import { startTransition, useActionState, useCallback, useEffect, useRef, useState } from "react";
 
+import { countryOptions, currencyLabel, currencyOptions } from "@/lib/choices";
 import { formatMoney, formatRate, HOME_CURRENCY, toHome } from "@/lib/money";
 import { INVOICE_FIELD_GROUPS, RECORD_CUSTOMER_FIELDS } from "@/lib/payments/form";
 import {
@@ -35,6 +36,8 @@ export interface CustomerOption {
   name: string | null;
   contact: string | null;
   currency: string | null;
+  /** The main ERP client list's currency for this customer, if it has one. */
+  erpCurrency: string | null;
   defaultPaymentTerms: string | null;
   notes: string | null;
   country: string | null;
@@ -88,6 +91,8 @@ function Input({
   hint,
   list,
   wide,
+  options,
+  blankLabel = "— not set —",
 }: {
   name: string;
   label: string;
@@ -96,7 +101,26 @@ function Input({
   hint?: string;
   list?: string;
   wide?: boolean;
+  /** A dropdown of these values ([value, label] pairs), with a blank first. */
+  options?: ReadonlyArray<readonly [string, string]>;
+  blankLabel?: string;
 }) {
+  if (options) {
+    return (
+      <label className={`block ${wide ? "sm:col-span-2" : ""}`}>
+        <span className="field-label">{label}</span>
+        <select name={name} defaultValue={value ?? ""} className="input">
+          <option value="">{blankLabel}</option>
+          {options.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+        {hint && <span className="mt-0.5 block text-[10px] text-[var(--color-ink-3)]">{hint}</span>}
+      </label>
+    );
+  }
   return (
     <label className={`block ${wide ? "sm:col-span-2" : ""}`}>
       <span className="field-label">{label}</span>
@@ -198,7 +222,9 @@ function readForm(
     customerInvoiceValue: n("customerInvoiceValue"),
     customsInvoiceValue: n("customsInvoiceValue"),
     exchangeRate: n("exchangeRate"),
-    currency: (s("currency") ?? s("customer.currency") ?? picked?.currency ?? null)?.toUpperCase() ?? null,
+    currency:
+      (s("currency") ?? s("customer.currency") ?? picked?.currency ?? picked?.erpCurrency ?? null)?.toUpperCase() ??
+      null,
     consignee: s("consignee") ?? picked?.consignee ?? null,
     notifyParty: s("notifyParty") ?? picked?.notifyParty ?? null,
     country: s("country") ?? picked?.country ?? null,
@@ -222,6 +248,11 @@ function readForm(
     receipts,
     notes,
   };
+}
+
+/** Currencies as [code, "USD — US Dollar"], keeping one already on file. */
+function currencyChoices(current: string | null | undefined) {
+  return currencyOptions(current).map((c) => [c, currencyLabel(c)] as const);
 }
 
 export function RecordForm(props: RecordFormProps) {
@@ -341,6 +372,15 @@ export function RecordForm(props: RecordFormProps) {
               type={type}
               value={(picked?.[field as keyof CustomerOption] as string | null) ?? ""}
               list={field === "defaultPaymentTerms" ? "rf-terms" : undefined}
+              options={field === "currency" ? currencyChoices(picked?.currency) : undefined}
+              blankLabel={
+                field === "currency" && picked?.erpCurrency ? `— ERP default: ${picked.erpCurrency} —` : undefined
+              }
+              hint={
+                field === "currency" && picked?.erpCurrency && !picked.currency
+                  ? "From the main ERP's client list. Pick one to confirm or correct it, in this module only."
+                  : undefined
+              }
             />
           ))}
         </div>
@@ -368,6 +408,14 @@ export function RecordForm(props: RecordFormProps) {
                     hint={BASIS_HINT[field]}
                     list={field === "paymentTerms" ? "rf-terms" : undefined}
                     wide={WIDE.has(field)}
+                    options={
+                      field === "currency"
+                        ? currencyChoices(props.initial.currency)
+                        : field === "country"
+                          ? countryOptions(props.initial.country).map((c) => [c, c] as const)
+                          : undefined
+                    }
+                    blankLabel={field === "currency" ? "— the customer's —" : undefined}
                   />
                 ))}
               </div>

@@ -144,9 +144,33 @@ export function MasterTable({
       {groups.map((group) => (
         <section key={group.key} className="card">
           {showHeadings && (
-            <div className="mb-3">
-              <h2 className="card-title mb-0.5">{group.label}</h2>
-              <p className="text-[11px] text-[var(--color-ink-3)]">{group.sub}</p>
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+              <div>
+                {group.customerId ? (
+                  // the customer's name is the way in to adjusting its payments:
+                  // it opens the customer at "Payments and notes on account"
+                  <h2 className="mb-1">
+                    <Link
+                      href={`${ROUTES.customer(group.customerId)}#on-account`}
+                      className="group inline-flex flex-wrap items-baseline gap-x-2 rounded-lg bg-[#e6f4f2] px-3 py-1.5 text-[17px] font-bold text-[var(--color-accent)] ring-1 ring-[#b9dfd9] transition-colors hover:bg-[#d3ece8]"
+                      title="Adjust payments: book a payment or a credit/debit note against this customer, and attribute it to invoices"
+                    >
+                      {group.label}
+                      <span className="text-[11px] font-semibold text-[var(--color-ink-2)] group-hover:text-[var(--color-accent)]">
+                        Adjust payments →
+                      </span>
+                    </Link>
+                  </h2>
+                ) : (
+                  <h2 className="card-title mb-0.5">{group.label}</h2>
+                )}
+                <p className="text-[11px] text-[var(--color-ink-3)]">{group.sub}</p>
+              </div>
+              {group.customerId && (
+                <Link href={ROUTES.customer(group.customerId)} className="btn-ghost btn-sm">
+                  Open customer
+                </Link>
+              )}
             </div>
           )}
 
@@ -256,7 +280,11 @@ function Row({ invoice, index }: { invoice: TrackedInvoice; index: number }) {
         </td>
         <td className={cell}>
           {invoice.customerId ? (
-            <Link href={ROUTES.customer(invoice.customerId)} className="link">
+            <Link
+              href={`${ROUTES.customer(invoice.customerId)}#on-account`}
+              className="rounded-md bg-[#e6f4f2] px-1.5 py-0.5 text-[13.5px] font-bold text-[var(--color-accent)] hover:bg-[#d3ece8] hover:underline"
+              title="Adjust this customer's payments"
+            >
               {invoice.customerName}
             </Link>
           ) : (

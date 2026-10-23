@@ -26,6 +26,8 @@ import {
 } from "@/components/tracking/bits";
 import { HistoryPanel } from "@/components/tracking/History";
 import { Banner, Empty, PageHead } from "@/components/ui";
+import { countryOptions, currencyOptions } from "@/lib/choices";
+import { currenciesFit, ON_ACCOUNT_LABELS } from "@/lib/payments/onAccount";
 import { BASIS_LABELS } from "@/lib/payments/terms";
 import { SUPPORTED_TERMS } from "@/lib/payments/terms";
 import { INVOICE_FIELD_GROUPS } from "@/lib/payments/form";
@@ -38,6 +40,7 @@ import {
   saveReceiptAction,
 } from "@/server/payments/actions";
 import { invoiceHistory } from "@/server/payments/audit";
+import { attributeOnAccountAction } from "@/server/payments/onAccountActions";
 import { ROUTES } from "@/lib/routes";
 import { loadInvoice } from "@/server/payments/query";
 
@@ -55,12 +58,18 @@ export default async function InvoiceDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ saved?: string }>;
+  searchParams: Promise<{ saved?: string; onAccount?: string }>;
 }) {
   const { id } = await params;
-  const { saved } = await searchParams;
-  const { invoice, customers, today, siblings } = await loadInvoice(id);
+  const { saved, onAccount: onAccountMessage } = await searchParams;
+  const { invoice, customers, today, siblings, onAccount } = await loadInvoice(id);
   if (!invoice) notFound();
+
+  // the customer's money on account that this invoice could take
+  const owing = (invoice.money.calculatedOutstanding ?? 0) > 0.01;
+  const applicable = onAccount.filter(
+    (e) => currenciesFit(e.currency, invoice.currency) && (e.kind === "DEBIT" || owing),
+  );
 
   const history = await invoiceHistory(id);
 
@@ -100,6 +109,7 @@ export default async function InvoiceDetailPage({
           recalculated, and the dashboard, search and reports show the same.
         </Banner>
       )}
+      {onAccountMessage && <Banner tone="info">{onAccountMessage}</Banner>}
 
       {/* ------------------------------------------------- the position */}
       <div className="mb-5 grid gap-4 lg:grid-cols-3">
@@ -471,6 +481,41 @@ export default async function InvoiceDetailPage({
             Add receipt
           </button>
         </form>
+
+        {applicable.length > 0 && invoice.customerId && (
+          <form
+            action={attributeOnAccountAction}
+            className="mt-4 flex flex-wrap items-end gap-3 rounded-xl border border-[#b9dfd9] bg-[#effaf8] p-4"
+          >
+            <input type="hidden" name="invoiceId" value={invoice.id} />
+            <input type="hidden" name="customerId" value={invoice.customerId} />
+            <input type="hidden" name="returnTo" value={ROUTES.invoice(invoice.id)} />
+            <div className="w-full text-[12px] font-semibold text-[var(--color-accent)]">
+              {invoice.customerName} has money on account that has not been attributed yet.{" "}
+              <Link href={`${ROUTES.customer(invoice.customerId)}#on-account`} className="link font-normal">
+                See it all
+              </Link>
+            </div>
+            <Field
+              name="onAccountId"
+              label="Apply from"
+              options={applicable.map(
+                (e) =>
+                  [
+                    e.id,
+                    `${ON_ACCOUNT_LABELS[e.kind]} · ${day(e.entryDate)}${e.reference ? ` · ${e.reference}` : ""} · ${money(e.unattributed, e.currency)} left`,
+                  ] as const,
+              )}
+              value={applicable[0].id}
+              blankLabel={null}
+              width="min-w-[300px] flex-[2]"
+            />
+            <Field name="amount" label="Amount" type="number" placeholder="as much as fits" width="w-40" />
+            <button type="submit" className="btn">
+              Apply to this invoice
+            </button>
+          </form>
+        )}
       </section>
 
       {/* ------------------------------------------------- CN / DN */}
@@ -637,9 +682,27 @@ export default async function InvoiceDetailPage({
                   name={name}
                   label={label}
                   type={type as "text" | "date" | "number"}
-                  value={values[name] as string | number | null}
+                  value={
+                    // an inherited currency is shown as the default, not
+                    // copied onto the invoice, so the customer's can still change it
+                    name === "currency" && invoice.currencySource !== "invoice"
+                      ? null
+                      : (values[name] as string | number | null)
+                  }
                   hint={HINTS[name]}
                   list={name === "paymentTerms" ? "pt-terms" : undefined}
+                  options={
+                    name === "currency"
+                      ? currencyOptions(values.currency as string | null)
+                      : name === "country"
+                        ? countryOptions(values.country as string | null)
+                        : undefined
+                  }
+                  blankLabel={
+                    name === "currency"
+                      ? `— customer's default${invoice.currencySource !== "invoice" && invoice.currency ? `: ${invoice.currency}` : ""} —`
+                      : undefined
+                  }
                   width={
                     name === "remarks" || name === "followUpNotes"
                       ? "min-w-[280px] flex-[2]"

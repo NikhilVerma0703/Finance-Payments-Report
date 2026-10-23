@@ -33,7 +33,7 @@ The database is the file `prisma/dev.db`. Copy it to back up your data. The
 
 | # | Section | What it is for |
 |---|---------|----------------|
-| 1 | **Dashboard & Master Table** | KPI cards per currency (total invoice value, received, outstanding, overdue outstanding, needs attention), the ageing summary as cards, every invoice in the full table grouped by customer, and the customer-wise summary at the bottom. Click an ageing card or a status to see those invoices. |
+| 1 | **Dashboard & Master Table** | The receivables overview: a *Needs attention* strip, then per currency a collection gauge with receipts by month and the KPI cards (invoice value, received, outstanding, overdue, needs attention, net outstanding). The customer-wise summary sits right below them, where a customer's currency can be set from its row. Then the balance falling due week by week, the ageing and the biggest balances, and every invoice in the full table grouped by customer. Click any card, week or status to see those invoices; click a customer's name to adjust its payments. |
 | 2 | **Search Invoices** | Every filter: search by invoice number or customer, customer, currency, status, ageing, PO number, payment terms, *Date Range On* (Invoice Date, Due Date, Overdue Date) with From/To, group by, outstanding only, needs attention, nothing received, requires verification. Apply and Reset. With no filter, every record is shown. |
 | 3 | **Upload Sheet** | Upload a customer payment sheet. Each upload lists its invoices with **EDIT OR ADD EXTRA INFORMATIONS** and **Delete**; a whole upload can be deleted together with the invoices that belong to it alone. |
 | 4 | **New Record** | The full entry form in ten sections — customer, invoice, parties, terms and dates, shipping, currency, receipts (as many as needed), credit/debit notes, books balances, remarks. No field is required. |
@@ -41,7 +41,9 @@ The database is the file `prisma/dev.db`. Copy it to back up your data. The
 | 6 | **Settings & Rules** | Payment terms recognised, your own payment-term rules, the status thresholds, and every formula with a live worked example. |
 
 Each invoice also has its own screen (from any invoice number) and each
-customer has a screen with an editable payment register.
+customer has a screen with an editable payment register and **Payments and
+notes on account**: a payment, credit note or debit note booked against the
+customer first and attributed to one or more of its invoices later.
 
 ## How the parts fit
 
@@ -64,6 +66,18 @@ customer has a screen with an editable payment register.
   summary and export follows.
 - **Deleting an upload** removes only the invoices it created that no other
   upload also carries (`src/lib/payments/uploads.ts`); everything else is kept.
+- **Money on account** (`pt_on_account`, `src/lib/payments/onAccount.ts`) is
+  held against the customer. Attributing it creates an ordinary receipt or
+  note on the invoice, carrying `onAccountId`; what is still unattributed is
+  worked out on read, never stored, and Undo on an attribution puts it back.
+  The customer's net outstanding is its invoices' outstanding less what is on
+  account.
+- **Customer currencies** come from the customer record here first, then from
+  a copy of the main ERP's client list (`pt_erp_clients`, uploaded in Settings
+  & Rules and matched by name in `src/lib/payments/erpClients.ts`). Nothing is
+  written back to the ERP; correcting a currency here affects this module only.
+- **Dropdowns** for currency, country, customer and type use the lists in
+  `src/lib/choices.ts`, which always keep a value already on file.
 
 ## Formulas in brief
 
@@ -71,6 +85,7 @@ Full reference with live examples: **Settings & Rules → Formulas and
 calculation rules**.
 
 - Outstanding = invoice value − total received − credit notes + debit notes
+- Net outstanding = outstanding − (payments + credit notes − debit notes held on account)
 - Total received = Σ receipt amounts (invoice currency)
 - Rate difference = receipt rate − invoice rate (INR per unit of the currency)
 - Forex gain/loss (INR) = rate difference × receipt amount

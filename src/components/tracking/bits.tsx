@@ -115,6 +115,8 @@ export function Field({
   hint,
   width = "",
   list,
+  options,
+  blankLabel = "— not set —",
 }: {
   name: string;
   label: string;
@@ -124,6 +126,13 @@ export function Field({
   hint?: string;
   width?: string;
   list?: string;
+  /**
+   * Makes the field a dropdown of these values, with a blank first so nothing
+   * is ever forced. Each is a value, or [value, label].
+   */
+  options?: ReadonlyArray<string | readonly [string, string]>;
+  /** The blank first choice's wording; null leaves it out. */
+  blankLabel?: string | null;
 }) {
   const id = `f-${name}`;
   return (
@@ -131,17 +140,31 @@ export function Field({
       <label className="field-label" htmlFor={id} title={hint}>
         {label}
       </label>
-      <input
-        id={id}
-        name={name}
-        type={type === "number" ? "text" : type}
-        inputMode={type === "number" ? "decimal" : undefined}
-        defaultValue={value ?? ""}
-        placeholder={placeholder}
-        list={list}
-        className="input"
-        autoComplete="off"
-      />
+      {options ? (
+        <select id={id} name={name} defaultValue={value ?? ""} className="input">
+          {blankLabel !== null && <option value="">{blankLabel}</option>}
+          {options.map((o) => {
+            const [v, l] = typeof o === "string" ? [o, o] : o;
+            return (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            );
+          })}
+        </select>
+      ) : (
+        <input
+          id={id}
+          name={name}
+          type={type === "number" ? "text" : type}
+          inputMode={type === "number" ? "decimal" : undefined}
+          defaultValue={value ?? ""}
+          placeholder={placeholder}
+          list={list}
+          className="input"
+          autoComplete="off"
+        />
+      )}
       {hint && <p className="mt-0.5 text-[10px] leading-snug text-[var(--color-ink-3)]">{hint}</p>}
     </div>
   );

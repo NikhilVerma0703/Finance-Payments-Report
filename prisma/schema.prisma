@@ -37,8 +37,9 @@ model PtCustomer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  invoices PtInvoice[]
-  edits    PtFieldEdit[]
+  invoices  PtInvoice[]
+  edits     PtFieldEdit[]
+  onAccount PtOnAccount[]
 
   @@index([name])
   @@map("pt_customers")
@@ -128,10 +129,16 @@ model PtReceipt {
   bankRef      String?
   remarks      String?
 
+  /// Set when this receipt is part of a payment first held on account against
+  /// the customer and attributed to this invoice afterwards.
+  onAccountId String?
+  onAccount   PtOnAccount? @relation(fields: [onAccountId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([invoiceId])
+  @@index([onAccountId])
   @@map("pt_receipts")
 }
 
@@ -147,11 +154,53 @@ model PtNote {
   amount   Float?
   reason   String?
 
+  /// Set when this note was first raised against the customer and attributed
+  /// to this invoice afterwards.
+  onAccountId String?
+  onAccount   PtOnAccount? @relation(fields: [onAccountId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([invoiceId])
+  @@index([onAccountId])
   @@map("pt_notes")
+}
+
+/// Money received from a customer, or a credit or debit note raised to one,
+/// before anybody has said which invoice it is for.
+///
+/// Accounts often has to book the amount first — a remittance with no invoice
+/// number, a claim settled as a lump sum — and attribute it later. It is held
+/// here against the customer, and each attribution becomes an ordinary receipt
+/// or note on the invoice it is attributed to, carrying `onAccountId`. What is
+/// still unattributed is never stored: it is the amount less those receipts or
+/// notes, worked out on read, so it can never disagree with the invoices.
+model PtOnAccount {
+  id         String     @id @default(cuid())
+  customerId String
+  customer   PtCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  /// RECEIPT | CREDIT | DEBIT
+  kind         String    @default("RECEIPT")
+  entryDate    DateTime?
+  /// In `currency` — the customer's own when left blank.
+  amount       Float?
+  currency     String?
+  /// Home currency per one unit of foreign currency, on the day it arrived.
+  exchangeRate Float?
+  /// Bank reference for a payment, the note number for a note.
+  reference    String?
+  remarks      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  receipts PtReceipt[]
+  notes    PtNote[]
+
+  @@index([customerId])
+  @@map("pt_on_account")
 }
 
 /// One change to one field, whatever kind of record it was on.
@@ -167,7 +216,7 @@ model PtNote {
 model PtFieldEdit {
   id String @id @default(cuid())
 
-  /// INVOICE | RECEIPT | NOTE | CUSTOMER
+  /// INVOICE | RECEIPT | NOTE | CUSTOMER | ON_ACCOUNT
   entity   String
   /// The id of that record. Kept even for a receipt or note that is later
   /// deleted, so the history does not develop holes.
@@ -260,6 +309,30 @@ model PtTermRule {
   updatedAt DateTime @updatedAt
 
   @@map("pt_term_rules")
+}
+
+/// One client from the main ERP's client list, copied here for its defaults.
+///
+/// Read-only to the rest of this module: it is replaced as a whole by uploading
+/// the list again, and nothing here is ever written back to the ERP. A customer
+/// with no currency of its own takes the currency of the client it matches by
+/// name; a currency set on the customer here always wins, so a wrong ERP
+/// default is corrected in this module without touching the ERP.
+model PtErpClient {
+  id           String  @id @default(cuid())
+  name         String
+  /// `clientKey(name)`: lower case, punctuation and legal suffixes removed.
+  nameKey      String  @unique
+  country      String?
+  currency     String?
+  paymentTerms String?
+  /// The file it was read from.
+  source       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("pt_erp_clients")
 }
 
 /// The adjustable thresholds the status and attention rules use.

@@ -63,7 +63,16 @@ export interface TrackedInvoiceInput {
 
   receipts: ReceiptInput[];
   notes: NoteInput[];
+
+  /**
+   * Where `currency` came from: the invoice itself, its customer's record, or
+   * the main ERP's client list (a default nobody here has confirmed). Absent
+   * where the caller does not know.
+   */
+  currencySource?: CurrencySource | null;
 }
+
+export type CurrencySource = "invoice" | "customer" | "erp";
 
 /**
  * The status one invoice reports.

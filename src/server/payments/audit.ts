@@ -24,7 +24,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { LOCAL_USER } from "@/lib/session";
 
-export type PtEntity = "INVOICE" | "RECEIPT" | "NOTE" | "CUSTOMER";
+export type PtEntity = "INVOICE" | "RECEIPT" | "NOTE" | "CUSTOMER" | "ON_ACCOUNT";
 
 export interface FieldChange {
   fieldKey: string;
@@ -183,10 +183,10 @@ export async function invoiceHistory(invoiceId: string): Promise<History> {
   return shape(rows);
 }
 
-/** One customer's history. */
+/** One customer's history: its own record, and its money held on account. */
 export async function customerHistory(customerId: string): Promise<History> {
   const rows = await prisma.ptFieldEdit.findMany({
-    where: { customerId, entity: "CUSTOMER" },
+    where: { customerId, entity: { in: ["CUSTOMER", "ON_ACCOUNT"] } },
     orderBy: { createdAt: "desc" },
   });
   return shape(rows);

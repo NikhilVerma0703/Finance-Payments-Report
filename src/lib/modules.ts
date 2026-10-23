@@ -19,7 +19,7 @@ export const NAV: NavItem[] = [
     href: ROUTES.dashboard,
     label: "Dashboard & Master Table",
     key: "dashboard",
-    hint: "KPIs, ageing, every invoice grouped by customer, and the customer-wise summary",
+    hint: "KPIs, the customer-wise summary, ageing, and every invoice grouped by customer",
   },
   {
     href: ROUTES.search,

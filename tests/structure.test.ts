@@ -83,10 +83,13 @@ describe("nothing of the Accounts ERP is left", () => {
 });
 
 describe("each section has what the brief asked for", () => {
-  it("the dashboard has no filter form, and the customer summary is last", () => {
+  it("the dashboard has no filter form, and the customer summary sits right below the KPIs", () => {
     const page = read("src/app/(app)/page.tsx");
     expect(page).not.toContain("<Filters");
-    expect(page.lastIndexOf("<CustomerSummary")).toBeGreaterThan(page.lastIndexOf("<MasterTable"));
+    const summary = page.indexOf("<CustomerSummary");
+    expect(summary).toBeGreaterThan(page.indexOf("<Dashboard"));
+    expect(summary).toBeLessThan(page.indexOf("<AgeingSummary"));
+    expect(summary).toBeLessThan(page.indexOf("<MasterTable"));
   });
 
   it("Search Invoices has the filters, with Apply and Reset", () => {

@@ -5,6 +5,10 @@
  * terms in use, the shipping references, and their own editable record. The
  * per-currency figures are separate, because a customer invoiced in two
  * currencies has two positions and not one.
+ *
+ * Money received or credited before anyone knows which invoice it is for is
+ * booked here, on account, and attributed to invoices later — see
+ * `OnAccountPanel`.
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -12,7 +16,9 @@ import { notFound } from "next/navigation";
 import { Facts, Field, homeMoney, money } from "@/components/tracking/bits";
 import { CustomerRegister } from "@/components/tracking/CustomerRegister";
 import { HistoryPanel } from "@/components/tracking/History";
+import { OnAccountPanel } from "@/components/tracking/OnAccount";
 import { Empty, PageHead } from "@/components/ui";
+import { countryOptions, currencyLabel, currencyOptions } from "@/lib/choices";
 import { SUPPORTED_TERMS } from "@/lib/payments/terms";
 import { deleteCustomerAction, saveCustomerAction } from "@/server/payments/actions";
 import { customerHistory } from "@/server/payments/audit";
@@ -21,10 +27,20 @@ import { ROUTES } from "@/lib/routes";
 
 export const dynamic = "force-dynamic";
 
-export default async function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function CustomerDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ onAccount?: string }>;
+}) {
   const { id } = await params;
-  const { customer, invoices, kpis, today } = await loadCustomer(id);
+  const { onAccount: message } = await searchParams;
+  const { customer, invoices, onAccount, erp, kpis, today } = await loadCustomer(id);
   if (!customer) notFound();
+
+  // the currency this customer's invoices fall back to, and where it came from
+  const currency = customer.currency ?? erp?.currency ?? null;
 
   const history = await customerHistory(id);
 
@@ -49,11 +65,14 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
     <>
       <PageHead
         title={customer.name ?? "Customer (unnamed)"}
-        lead={[customer.country, customer.currency, customer.defaultPaymentTerms]
+        lead={[customer.country, currency, customer.defaultPaymentTerms]
           .filter(Boolean)
           .join(" · ")}
         actions={
           <>
+            <Link href="#on-account" className="btn-ghost">
+              Payment on account
+            </Link>
             <Link href={`${ROUTES.newRecord}?customerId=${customer.id}`} className="btn-ghost">
               Add an invoice
             </Link>
@@ -109,12 +128,37 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
                     ),
                   ],
                   ["Needs attention", String(k.needsAttention)],
+                  ...(k.onAccount.entries > 0
+                    ? ([
+                        [
+                          "On account",
+                          <span key="g" className="tabular-nums text-[var(--color-accent)]">
+                            {money(k.onAccount.net, k.currency)} not yet attributed
+                          </span>,
+                        ],
+                        [
+                          "Net outstanding",
+                          <strong key="h" className="tabular-nums">
+                            {money(k.totalOutstanding - k.onAccount.net, k.currency)}
+                          </strong>,
+                        ],
+                      ] as Array<[string, React.ReactNode]>)
+                    : []),
                 ]}
               />
             </section>
           ))}
         </div>
       )}
+
+      <OnAccountPanel
+        customerId={customer.id}
+        currency={currency}
+        entries={onAccount}
+        invoices={invoices}
+        message={message}
+        returnTo={`${ROUTES.customer(customer.id)}#on-account`}
+      />
 
       {invoices.length === 0 ? (
         <section className="card mb-5">
@@ -164,13 +208,27 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
         <form action={saveCustomerAction} className="flex flex-wrap gap-3">
           <input type="hidden" name="customerId" value={customer.id} />
           <Field name="name" label="Name" value={customer.name} width="min-w-[220px] flex-1" />
-          <Field name="country" label="Country" value={customer.country} width="w-40" />
+          <Field
+            name="country"
+            label="Country"
+            value={customer.country}
+            options={countryOptions(customer.country)}
+            width="w-48"
+          />
           <Field
             name="currency"
             label="Currency"
             value={customer.currency}
-            width="w-28"
-            hint="Used where an invoice does not state one."
+            options={currencyOptions(customer.currency).map((c) => [c, currencyLabel(c)] as const)}
+            blankLabel={erp?.currency ? `— ERP default: ${erp.currency} —` : "— not set —"}
+            width="w-56"
+            hint={
+              erp?.currency
+                ? customer.currency && customer.currency !== erp.currency
+                  ? `Set here; the ERP client list says ${erp.currency}. This module only.`
+                  : `ERP client list: ${erp.currency}. Pick one to confirm or correct it here only.`
+                : "Used where an invoice does not state one."
+            }
           />
           <Field
             name="defaultPaymentTerms"

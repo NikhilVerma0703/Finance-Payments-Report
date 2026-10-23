@@ -73,6 +73,7 @@ describe("Payment Tracking: every column has a box on a form", () => {
     id: "the key",
     customerId: "set by the customer picker, not a text box",
     invoiceId: "the parent key",
+    onAccountId: "set by attributing a payment or note held on account, not a text box",
     seq: "the receipt's number, assigned in order",
     createdAt: "when the row was made",
     updatedAt: "when the row last changed",

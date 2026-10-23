@@ -18,7 +18,8 @@ import { buildTrackedInvoice, STATUS_LABELS, STATUS_ORDER } from "@/lib/payments
 import { BASIS_LABELS, DATE_BASES, readTerm, SUPPORTED_TERMS } from "@/lib/payments/terms";
 import { ROUTES } from "@/lib/routes";
 import { addDays } from "@/lib/text";
-import { loadTracking } from "@/server/payments/query";
+import { clearErpClientsAction, importErpClientsAction } from "@/server/payments/erpClientActions";
+import { loadErpOverview, loadTracking } from "@/server/payments/query";
 import { PARAM_FIELDS } from "@/server/payments/settings";
 import { deleteTermRuleAction, toggleTermRuleAction } from "@/server/payments/settingsActions";
 
@@ -49,10 +50,13 @@ function Formula({
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ edit?: string; test?: string; wording?: string }>;
+  searchParams: Promise<{ edit?: string; test?: string; wording?: string; erp?: string }>;
 }) {
   const sp = await searchParams;
   const { invoices, rules, params, today } = await loadTracking();
+  const erp = await loadErpOverview();
+  const matched = erp.customers.filter((c) => c.erp);
+  const unmatched = erp.customers.filter((c) => !c.erp && !c.own);
 
   // ---- the wordings in use, as they are currently understood
   const inUse = new Map<string, { count: number; reading: ReturnType<typeof readTerm> }>();
@@ -367,7 +371,100 @@ export default async function SettingsPage({
         </p>
       </section>
 
-      {/* ------------------------------------------------ 4. formulas */}
+      {/* ------------------------------------------------ 4. ERP client list */}
+      <section className="card mb-5 scroll-mt-4" id="erp-clients">
+        <h2 className="card-title">Customer currencies from the main ERP</h2>
+        <p className="mb-3 max-w-[90ch] text-[12px] text-[var(--color-ink-2)]">
+          The main ERP keeps each client&rsquo;s default currency. Upload its client list here — the
+          ERP&rsquo;s own <em>Customer list</em> workbook, or any .xlsx or .csv with a customer name
+          column and a currency column — and every customer here without a currency of its own takes
+          the ERP&rsquo;s, matched by name. A currency set on a customer in this module always wins,
+          and nothing is ever written back to the ERP.
+        </p>
+
+        {sp.erp && (
+          <div className="banner mb-3 border-[#c6dcf3] bg-[var(--color-info-bg)] text-[var(--color-info-fg)]">
+            {sp.erp}
+          </div>
+        )}
+
+        <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-1 text-[12px]">
+          <span>
+            <strong className="tabular-nums">{erp.clients.length}</strong> ERP client(s) on file
+            {erp.source && <> · from <strong>{erp.source}</strong></>}
+            {erp.loadedAt && <> · {erp.loadedAt.toISOString().slice(0, 10)}</>}
+          </span>
+          <span>
+            <strong className="tabular-nums">{matched.length}</strong> of {erp.customers.length} customer(s)
+            matched
+          </span>
+          {unmatched.length > 0 && (
+            <span className="text-[var(--color-warn-fg)]">
+              {unmatched.length} customer(s) have no currency from anywhere
+            </span>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3">
+          <form action={importErpClientsAction} className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="field-label" htmlFor="erp-file">
+                ERP client list (.xlsx or .csv)
+              </label>
+              <input id="erp-file" name="file" type="file" accept=".xlsx,.csv" className="input" />
+            </div>
+            <button type="submit" className="btn">
+              {erp.clients.length ? "Replace the list" : "Upload the list"}
+            </button>
+          </form>
+          {erp.clients.length > 0 && (
+            <ConfirmDelete
+              action={clearErpClientsAction}
+              fields={{}}
+              label="Remove the list"
+              question="Customers without a currency of their own go back to having none. Currencies set here are kept."
+              confirmLabel="Yes, remove it"
+            />
+          )}
+        </div>
+
+        {(matched.length > 0 || unmatched.length > 0) && (
+          <div className="tablewrap mt-4 max-h-[360px] overflow-y-auto">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className={head}>
+                  <th className="px-3 py-2">Customer here</th>
+                  <th className="px-3 py-2">Set here</th>
+                  <th className="px-3 py-2">ERP client</th>
+                  <th className="px-3 py-2">ERP currency</th>
+                  <th className="px-3 py-2">Used</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...matched, ...unmatched].map((c) => (
+                  <tr key={c.id} className="border-t border-[var(--color-line)]">
+                    <td className="px-3 py-1.5">
+                      <Link href={ROUTES.customer(c.id)} className="link">
+                        {c.name ?? "(unnamed)"}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-1.5">{c.own ?? "—"}</td>
+                    <td className="px-3 py-1.5 text-[var(--color-ink-2)]">{c.erp?.name ?? "no match"}</td>
+                    <td className="px-3 py-1.5">{c.erp?.currency ?? "—"}</td>
+                    <td className="px-3 py-1.5 font-semibold">
+                      {c.own ?? c.erp?.currency ?? (
+                        <span className="font-normal text-[var(--color-warn-fg)]">none — set it on the customer</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* ------------------------------------------------ 5. formulas */}
       <section className="card" id="formulas">
         <h2 className="card-title">Formulas and calculation rules</h2>
         <p className="mb-4 text-[12px] text-[var(--color-ink-2)]">

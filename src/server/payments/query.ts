@@ -13,11 +13,20 @@ import { cache } from "react";
 
 import { prisma } from "@/lib/db";
 import { ageingSummary, type AgeingSummary } from "@/lib/payments/ageing";
+import { clientKey, matchErpClient } from "@/lib/payments/erpClients";
 import { ageingLabels } from "@/lib/payments/money";
+import {
+  buildOnAccount,
+  isOnAccountKind,
+  onAccountTotals,
+  type OnAccountEntry,
+  type OnAccountTotals,
+} from "@/lib/payments/onAccount";
 import {
   buildTrackedInvoice,
   STATUS_LABELS,
   TRACKING_DEFAULTS,
+  type CurrencySource,
   type TrackedInvoice,
   type TrackingParams,
   type TrackingStatus,
@@ -31,6 +40,12 @@ export interface CustomerSummary {
   id: string | null;
   name: string;
   currency: string;
+  /**
+   * Where the row's currency came from. "invoice" only when every invoice in
+   * the row states its own — then the customer's default is not what decides
+   * it, and changing that default would not move the row.
+   */
+  currencySource: CurrencySource | null;
   invoices: number;
   invoiceValue: number;
   received: number;
@@ -42,6 +57,10 @@ export interface CustomerSummary {
   needsAttention: number;
   oldestDue: string | null;
   statuses: Partial<Record<TrackingStatus, number>>;
+  /** Unattributed money on account, as a credit: payments + CN − DN. */
+  onAccount: number;
+  /** Outstanding less what is on account — what the customer actually owes. */
+  netOutstanding: number;
 }
 
 export interface TrackingKpis {
@@ -88,10 +107,15 @@ export interface TrackingKpis {
   homeReceived: number;
   homeOutstanding: number;
   homeRatesKnown: number;
+
+  /** What is held on account in this currency and not yet attributed. */
+  onAccount: OnAccountTotals;
 }
 
 export interface TrackingView {
   invoices: TrackedInvoice[];
+  /** Every customer-level payment and note, with what is left to attribute. */
+  onAccount: OnAccountEntry[];
   customers: CustomerSummary[];
   kpis: TrackingKpis[];
   params: TrackingParams;
@@ -112,6 +136,10 @@ export interface TrackingView {
     withoutDueDate: number;
     customers: number;
     receipts: number;
+    /** Customers whose invoices have no currency from anywhere. */
+    customersWithoutCurrency: number;
+    /** Clients in the copy of the ERP's client list. */
+    erpClients: number;
   };
   imports: Array<{
     id: string;
@@ -133,7 +161,7 @@ async function readTracking(): Promise<TrackingView> {
   const today = todayIso();
   const [params, rules] = await Promise.all([loadParams(), loadRules()]);
 
-  const [rows, imports] = await Promise.all([
+  const [rows, imports, entries, erp] = await Promise.all([
     prisma.ptInvoice.findMany({
       include: {
         customer: true,
@@ -157,10 +185,28 @@ async function readTracking(): Promise<TrackingView> {
         createdAt: true,
       },
     }),
+    prisma.ptOnAccount.findMany({
+      include: {
+        customer: true,
+        receipts: { include: { invoice: { select: { invoiceNo: true } } } },
+        notes: { include: { invoice: { select: { invoiceNo: true } } } },
+      },
+      orderBy: [{ entryDate: "desc" }, { createdAt: "desc" }],
+    }),
+    loadErpClients(),
   ]);
 
-  const invoices = rows.map((r) =>
-    buildTrackedInvoice(
+  // a customer's currency: its own, else the ERP client list's default for it
+  const currencyOf = (c: { name: string | null; currency: string | null } | null | undefined) => {
+    if (!c) return { currency: null, source: null };
+    if (c.currency) return { currency: c.currency, source: "customer" as const };
+    const hit = matchErpClient(c.name, erp);
+    return hit?.currency ? { currency: hit.currency, source: "erp" as const } : { currency: null, source: null };
+  };
+
+  const invoices = rows.map((r) => {
+    const fallback = currencyOf(r.customer);
+    return buildTrackedInvoice(
       {
         id: r.id,
         customerId: r.customerId,
@@ -170,7 +216,8 @@ async function readTracking(): Promise<TrackingView> {
         customerInvoiceValue: n(r.customerInvoiceValue),
         customsInvoiceValue: n(r.customsInvoiceValue),
         exchangeRate: n(r.exchangeRate),
-        currency: r.currency ?? r.customer?.currency ?? null,
+        currency: r.currency ?? fallback.currency,
+        currencySource: r.currency ? "invoice" : fallback.source,
         consignee: r.consignee ?? r.customer?.consignee ?? null,
         notifyParty: r.notifyParty ?? r.customer?.notifyParty ?? null,
         country: r.country ?? r.customer?.country ?? null,
@@ -210,13 +257,35 @@ async function readTracking(): Promise<TrackingView> {
         })),
       },
       { today, params, rules },
-    ),
+    );
+  });
+
+  const onAccount = entries.map((e) =>
+    buildOnAccount({
+      id: e.id,
+      customerId: e.customerId,
+      customerName: e.customer.name,
+      kind: isOnAccountKind(e.kind) ? e.kind : "RECEIPT",
+      entryDate: d(e.entryDate),
+      amount: n(e.amount),
+      currency: e.currency ?? currencyOf(e.customer).currency,
+      exchangeRate: n(e.exchangeRate),
+      reference: e.reference,
+      remarks: e.remarks,
+      attributions: [...e.receipts, ...e.notes].map((x) => ({
+        id: x.id,
+        invoiceId: x.invoiceId,
+        invoiceNo: x.invoice.invoiceNo,
+        amount: ("amountFcy" in x ? n(x.amountFcy) : n(x.amount)) ?? 0,
+      })),
+    }),
   );
 
   return {
     invoices,
-    customers: summarise(invoices),
-    kpis: kpisFrom(invoices, params),
+    onAccount,
+    customers: summarise(invoices, onAccount),
+    kpis: kpisFrom(invoices, params, onAccount),
     params,
     rules,
     today,
@@ -234,9 +303,45 @@ async function readTracking(): Promise<TrackingView> {
       withoutDueDate: invoices.filter((i) => i.schedule.dueDate === null).length,
       customers: new Set(invoices.map((i) => i.customerId ?? "~none")).size,
       receipts: invoices.reduce((s, i) => s + i.receipts.length, 0),
+      customersWithoutCurrency: new Set(
+        invoices.filter((i) => i.customerId && !i.currency).map((i) => i.customerId),
+      ).size,
+      erpClients: erp.size,
     },
     imports: imports.map((i) => ({ ...i, asOn: d(i.asOn) })),
   };
+}
+
+/** The copy of the ERP's client list, by match key. */
+async function loadErpClients() {
+  const rows = await prisma.ptErpClient.findMany();
+  return new Map(rows.map((r) => [r.nameKey, r]));
+}
+
+/** The copy of the ERP client list, and how this module's customers match it. */
+export async function loadErpOverview() {
+  const [clients, customers] = await Promise.all([
+    prisma.ptErpClient.findMany({ orderBy: { name: "asc" } }),
+    prisma.ptCustomer.findMany({ orderBy: { name: "asc" } }),
+  ]);
+  const byKey = new Map(clients.map((c) => [c.nameKey, c]));
+  return {
+    clients,
+    source: clients[0]?.source ?? null,
+    loadedAt: clients.reduce<Date | null>((t, c) => (!t || c.updatedAt > t ? c.updatedAt : t), null),
+    customers: customers.map((c) => ({
+      id: c.id,
+      name: c.name,
+      own: c.currency,
+      erp: matchErpClient(c.name, byKey),
+    })),
+  };
+}
+
+/** The ERP client a customer of this module matches, for the screens that say so. */
+export async function erpClientFor(name: string | null | undefined) {
+  const key = clientKey(name);
+  return key ? prisma.ptErpClient.findUnique({ where: { nameKey: key } }) : null;
 }
 
 const d = (v: Date | null) => (v ? v.toISOString().slice(0, 10) : null);
@@ -250,33 +355,47 @@ function unique(values: string[]): string[] {
 // Summaries
 // ---------------------------------------------------------------------------
 
-/** One row per customer **and currency** — two currencies cannot be added. */
-export function summarise(invoices: TrackedInvoice[]): CustomerSummary[] {
+/**
+ * One row per customer **and currency** — two currencies cannot be added.
+ *
+ * Money held on account sits on its customer's row in its own currency, and a
+ * customer with money on account but no invoice in that currency still gets a
+ * row, so a payment never disappears for want of an invoice to show it beside.
+ */
+export function summarise(
+  invoices: TrackedInvoice[],
+  onAccount: OnAccountEntry[] = [],
+): CustomerSummary[] {
   const groups = new Map<string, CustomerSummary>();
+  const blank = (id: string | null, name: string, currency: string): CustomerSummary => ({
+    id,
+    name,
+    currency,
+    currencySource: null,
+    invoices: 0,
+    invoiceValue: 0,
+    received: 0,
+    outstanding: 0,
+    overdue: 0,
+    collectedPct: 0,
+    dueDatesKnown: 0,
+    needsAttention: 0,
+    oldestDue: null,
+    statuses: {} as Partial<Record<TrackingStatus, number>>,
+    onAccount: 0,
+    netOutstanding: 0,
+  });
 
   for (const i of invoices) {
     const name = i.customerName ?? "No customer recorded";
     const currency = i.currency ?? "—";
     const k = `${i.customerId ?? "~none"}::${currency}`;
 
-    const g =
-      groups.get(k) ??
-      {
-        id: i.customerId,
-        name,
-        currency,
-        invoices: 0,
-        invoiceValue: 0,
-        received: 0,
-        outstanding: 0,
-        overdue: 0,
-        collectedPct: 0,
-        dueDatesKnown: 0,
-        needsAttention: 0,
-        oldestDue: null,
-        statuses: {} as Partial<Record<TrackingStatus, number>>,
-      };
+    const g = groups.get(k) ?? blank(i.customerId, name, currency);
 
+    // a row inherits its currency if any one of its invoices does
+    const source = i.currencySource ?? null;
+    if (g.invoices === 0 || g.currencySource === "invoice") g.currencySource = source;
     g.invoices += 1;
     g.invoiceValue = round2(g.invoiceValue + (i.customerInvoiceValue ?? 0));
     g.received = round2(g.received + i.money.totalReceived);
@@ -295,11 +414,39 @@ export function summarise(invoices: TrackedInvoice[]): CustomerSummary[] {
     groups.set(k, g);
   }
 
+  for (const e of onAccount) {
+    if (e.unattributed <= 0) continue;
+    const currency = e.currency ?? "—";
+    const k = `${e.customerId}::${currency}`;
+    const g = groups.get(k) ?? blank(e.customerId, e.customerName ?? "(unnamed)", currency);
+    g.onAccount = round2(g.onAccount + e.credit);
+    groups.set(k, g);
+  }
+
   for (const g of groups.values()) {
     g.collectedPct = g.invoiceValue > 0 ? Math.round((g.received / g.invoiceValue) * 1000) / 10 : 0;
+    g.netOutstanding = round2(g.outstanding - g.onAccount);
   }
 
   return [...groups.values()].sort((a, b) => b.outstanding - a.outstanding);
+}
+
+/**
+ * The on-account entries that belong with a filtered set of invoices.
+ *
+ * Unfiltered, every one. Filtered, those of the customers still in view, in a
+ * currency still in view — an entry is not an invoice, so a status or ageing
+ * filter cannot apply to it, but it should not survive one that removed its
+ * customer.
+ */
+export function onAccountFor(
+  entries: OnAccountEntry[],
+  filters: TrackingFilters,
+  visible: TrackedInvoice[],
+): OnAccountEntry[] {
+  if (activeFilters(filters).length === 0) return entries;
+  const keys = new Set(visible.map((i) => `${i.customerId}::${i.currency ?? "—"}`));
+  return entries.filter((e) => keys.has(`${e.customerId}::${e.currency ?? "—"}`));
 }
 
 /**
@@ -314,6 +461,7 @@ export function summarise(invoices: TrackedInvoice[]): CustomerSummary[] {
 export function kpisFrom(
   invoices: TrackedInvoice[],
   params: TrackingParams = TRACKING_DEFAULTS,
+  onAccount: OnAccountEntry[] = [],
 ): TrackingKpis[] {
   const labels = ageingLabels(params.ageingBuckets);
   const byCurrency = new Map<string, TrackedInvoice[]>();
@@ -415,6 +563,7 @@ export function kpisFrom(
       homeReceived,
       homeOutstanding,
       homeRatesKnown,
+      onAccount: onAccountTotals(onAccount.filter((e) => (e.currency ?? "—") === currency)),
     });
   }
 
@@ -559,7 +708,9 @@ export function filterInvoices(rows: TrackedInvoice[], f: TrackingFilters): Trac
     const outstanding = i.money.calculatedOutstanding ?? 0;
     if (f.open === "1" && outstanding <= 0.01) return false;
     if (f.customer && (i.customerName ?? "") !== f.customer) return false;
-    if (f.currency && (i.currency ?? "") !== f.currency) return false;
+    // "—" is how the screens print "no currency", and a link from that
+    // section carries it: it means exactly the invoices with none
+    if (f.currency && (i.currency ?? "—") !== f.currency) return false;
     if (f.status && i.status !== f.status) return false;
     if (f.ageing && i.ageing !== f.ageing) return false;
     if (f.po && (i.poNo ?? "") !== f.po) return false;
@@ -654,6 +805,8 @@ export function isGrouping(v: string | null | undefined): v is Grouping {
 export interface InvoiceGroup {
   key: string;
   label: string;
+  /** Set when the group is one customer's, so its heading can open that customer. */
+  customerId?: string | null;
   sub: string;
   rows: TrackedInvoice[];
   totals: {
@@ -682,7 +835,10 @@ export function groupInvoices(rows: TrackedInvoice[], grouping: Grouping): Invoi
     else buckets.set(key, { label, rows: [i] });
   }
 
-  const groups = [...buckets.entries()].map(([k, b]) => build(k, b.label, b.rows));
+  const groups = [...buckets.entries()].map(([k, b]) => ({
+    ...build(k, b.label, b.rows),
+    customerId: grouping === "customer" ? b.rows[0].customerId : undefined,
+  }));
   if (grouping === "month") groups.sort((a, b) => b.key.localeCompare(a.key));
   else if (grouping === "status") {
     groups.sort((a, b) => b.totals.outstanding - a.totals.outstanding);
@@ -776,12 +932,15 @@ function monthLabel(ym: string): string {
 export async function loadCustomer(id: string) {
   const view = await loadTracking();
   const invoices = view.invoices.filter((i) => i.customerId === id);
+  const onAccount = view.onAccount.filter((e) => e.customerId === id);
   const customer = await prisma.ptCustomer.findUnique({ where: { id } });
   return {
     customer,
     invoices,
-    summary: summarise(invoices),
-    kpis: kpisFrom(invoices, view.params),
+    onAccount,
+    erp: customer ? await erpClientFor(customer.name) : null,
+    summary: summarise(invoices, onAccount),
+    kpis: kpisFrom(invoices, view.params, onAccount),
     today: view.today,
     params: view.params,
   };
@@ -800,6 +959,10 @@ export async function loadInvoice(id: string) {
     /** Other invoices for the same customer, for the "see also" list. */
     siblings: invoice
       ? view.invoices.filter((i) => i.customerId === invoice.customerId && i.id !== id)
+      : [],
+    /** The customer's money on account that could still go to this invoice. */
+    onAccount: invoice?.customerId
+      ? view.onAccount.filter((e) => e.customerId === invoice.customerId && e.unattributed > 0)
       : [],
   };
 }

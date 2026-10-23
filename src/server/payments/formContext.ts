@@ -6,13 +6,14 @@
 import "server-only";
 
 import { prisma } from "@/lib/db";
+import { matchErpClient } from "@/lib/payments/erpClients";
 import { SUPPORTED_TERMS } from "@/lib/payments/terms";
 import { todayIso } from "@/lib/text";
 import type { CustomerOption } from "@/components/tracking/RecordForm";
 import { loadParams, loadRules } from "@/server/payments/settings";
 
 export async function loadFormContext() {
-  const [customers, rules, params, used] = await Promise.all([
+  const [customers, rules, params, used, erp] = await Promise.all([
     prisma.ptCustomer.findMany({ orderBy: { name: "asc" } }),
     loadRules(),
     loadParams(),
@@ -21,7 +22,9 @@ export async function loadFormContext() {
       distinct: ["paymentTerms"],
       select: { paymentTerms: true },
     }),
+    prisma.ptErpClient.findMany(),
   ]);
+  const erpByKey = new Map(erp.map((e) => [e.nameKey, e]));
 
   const termOptions = [
     ...new Set([
@@ -36,6 +39,7 @@ export async function loadFormContext() {
     name: c.name,
     contact: c.contact,
     currency: c.currency,
+    erpCurrency: matchErpClient(c.name, erpByKey)?.currency ?? null,
     defaultPaymentTerms: c.defaultPaymentTerms,
     notes: c.notes,
     country: c.country,
