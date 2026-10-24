@@ -1,6 +1,14 @@
 /**
  * Dashboard & Master Table.
  *
+ * Pending invoices only, by default (owner, 24 Oct 2026: "Only pending
+ * invoices should show as default"): every figure, the summary and the ageing
+ * are over the invoices still owing, a switch at the top takes in every
+ * invoice instead, and every invoice — cleared and pending — is in a folded
+ * table at the foot of the page. What came in (the receipts by month and the
+ * received timeline) is always over every invoice: a receipt on an invoice
+ * since cleared is still money that came in. `?show=all` is the switch.
+ *
  * The receivables overview: what needs attention, the KPI cards, the
  * customer-wise summary right below them, and what falls due week by week
  * with the ageing and the biggest balances. The master table is a section of
@@ -15,6 +23,7 @@ import Link from "next/link";
 import { CustomerSummary, isSummarySort } from "@/components/tracking/CustomerSummary";
 import { AgeingSummary, Dashboard } from "@/components/tracking/Dashboard";
 import { AttentionStrip, asAtTime, OverviewHead, type AttentionItem } from "@/components/tracking/Overview";
+import { AllInvoices, PendingSwitch } from "@/components/tracking/PendingView";
 import { Banner } from "@/components/ui";
 import { formatMoney } from "@/lib/money";
 import { ageingLabels } from "@/lib/payments/money";
@@ -24,9 +33,12 @@ import {
   describeFilters,
   filterInvoices,
   filtersFrom,
+  groupInvoices,
+  isPending,
   kpisFrom,
   loadTracking,
   onAccountFor,
+  showsAll,
   summarise,
   toQuery,
   type TrackingFilters,
@@ -45,13 +57,21 @@ export default async function DashboardPage({
   const csort = isSummarySort(sp.csort) ? sp.csort : "outstanding";
   const { invoices, onAccount: allOnAccount, params, today, counts, options } = await loadTracking();
 
-  const visible = filterInvoices(invoices, filters);
-  const onAccount = onAccountFor(allOnAccount, filters, visible);
+  const showAll = showsAll(sp.show);
+  // every invoice the filters let through, and of those the ones still owing
+  const inView = filterInvoices(invoices, filters);
+  const pending = inView.filter(isPending);
+  const visible = showAll ? inView : pending;
+  // money on account belongs to its customer whether or not anything is pending
+  const onAccount = onAccountFor(allOnAccount, filters, inView);
   const kpis = kpisFrom(visible, params, onAccount);
   const customers = summarise(visible, onAccount);
   const withoutDueDate = visible.filter((i) => i.schedule.dueDate === null).length;
+  const defaulted = visible.filter((i) => i.schedule.dueDateSource === "default" && isPending(i)).length;
 
   const query = toQuery(filters);
+  // the export takes what is shown
+  const exportQuery = toQuery(filters, showAll ? {} : { open: "1" });
   const narrowed = activeFilters(filters);
   const time = asAtTime();
   const month = today.slice(0, 7);
@@ -63,7 +83,7 @@ export default async function DashboardPage({
         time={time}
         invoices={visible.length}
         customers={new Set(visible.map((i) => i.customerId ?? "~none")).size}
-        receiptsThisMonth={visible.reduce(
+        receiptsThisMonth={inView.reduce(
           (n, i) => n + i.receipts.filter((r) => (r.receiptDate ?? "").startsWith(month)).length,
           0,
         )}
@@ -77,7 +97,7 @@ export default async function DashboardPage({
             <Link href={ROUTES.search} className="btn-ghost btn-sm">
               Search invoices
             </Link>
-            <Link href={`${ROUTES.exportView}?${query}`} className="btn btn-sm">
+            <Link href={`${ROUTES.exportView}?${exportQuery}`} className="btn btn-sm">
               Export this view
             </Link>
           </>
@@ -98,6 +118,14 @@ export default async function DashboardPage({
         </Banner>
       ) : (
         <>
+          <PendingSwitch
+            showAll={showAll}
+            pending={pending.length}
+            total={inView.length}
+            pendingHref={`${ROUTES.dashboard}${query ? `?${query}` : ""}`}
+            allHref={`${ROUTES.dashboard}?${toQuery(filters, { show: "all" })}`}
+          />
+
           {narrowed.length > 0 && (
             <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[#c6dcf3] bg-[var(--color-info-bg)] px-3 py-2 text-[12px]">
               <span className="font-semibold text-[var(--color-info-fg)]">
@@ -128,7 +156,7 @@ export default async function DashboardPage({
             })}
           />
 
-          <Dashboard kpis={kpis} today={today} invoices={visible} onAccount={onAccount} filters={filters} />
+          <Dashboard kpis={kpis} today={today} invoices={visible} receiptsFrom={inView} onAccount={onAccount} filters={filters} />
 
           <CustomerSummary
             customers={customers}
@@ -140,7 +168,25 @@ export default async function DashboardPage({
             returnTo={`${ROUTES.dashboard}?${toQuery(filters, csort !== "outstanding" ? { csort } : {})}#customers`}
           />
 
-          <AgeingSummary kpis={kpis} filters={filters} invoices={visible} customers={customers} today={today} />
+          <AgeingSummary
+            kpis={kpis}
+            filters={filters}
+            invoices={visible}
+            receiptsFrom={inView}
+            onAccount={onAccount}
+            customers={customers}
+            today={today}
+          />
+
+          {defaulted > 0 && (
+            <Banner tone="info">
+              <strong>{defaulted}</strong> pending invoice(s) are dated by the default credit period —{" "}
+              {params.defaultDueDays} days after the invoice date — because their payment terms, or the date
+              the terms count from (usually the BL date), are not recorded. Each is marked{" "}
+              <em>default</em> at its due date; add the terms or the BL date to date it properly. The
+              period is set in Settings &amp; Rules.
+            </Banner>
+          )}
 
           {withoutDueDate > 0 && (
             <Banner tone="warn">
@@ -150,9 +196,20 @@ export default async function DashboardPage({
             </Banner>
           )}
 
+          {/* every invoice, cleared ones too, folded until asked for */}
+          <AllInvoices
+            groups={groupInvoices(inView, "customer")}
+            count={inView.length}
+            query={toQuery(filters, { all: "1", ...(showAll ? { show: "all" } : {}) })}
+            sort={filters.sort}
+            dir={filters.dir}
+            basePath={ROUTES.dashboard}
+            open={sp.all === "1"}
+          />
+
           <div className="mt-8 text-center">
             <Link href={`${ROUTES.masterTable}${query ? `?${query}` : ""}`} className="btn">
-              Open the Master Table — every invoice, grouped by customer →
+              Open the Master Table — pending invoices, grouped by customer →
             </Link>
           </div>
         </>

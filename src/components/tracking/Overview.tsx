@@ -13,7 +13,7 @@
 import Link from "next/link";
 
 import { currencySymbol } from "@/lib/money";
-import { monthProgress, type MonthPoint, type WeekColumn } from "@/lib/payments/overview";
+import { monthProgress, type MonthPoint, type ReceivedColumn, type WeekColumn } from "@/lib/payments/overview";
 import { ROUTES } from "@/lib/routes";
 import { toQuery, type CustomerSummary, type TrackingFilters } from "@/server/payments/query";
 import { AutoSelect } from "./AutoSelect";
@@ -475,6 +475,131 @@ export function DueStrip({
         <Legend swatch="ring-2 ring-[var(--color-brand)] bg-white">this week</Legend>
         <Legend swatch="bg-[rgba(15,118,110,0.6)]">falling due</Legend>
         <Legend swatch="border border-dashed border-[#e2b34d] bg-[var(--color-warn-bg)]">no due date</Legend>
+        <span>darker = more money</span>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Received, week by week
+// ---------------------------------------------------------------------------
+
+/**
+ * The received side of the falling-due strip (owner, 24 Oct 2026: "we should
+ * have Received timeline too on dashboard"): what came in each week, Monday to
+ * Sunday, in green — darker for more money. Every receipt counts, cleared
+ * invoices too, and money booked on account. Click a week for the invoices
+ * with a receipt dated in it.
+ */
+export function ReceivedStrip({
+  columns,
+  currency,
+  filters,
+}: {
+  columns: ReceivedColumn[];
+  currency: string;
+  filters: TrackingFilters;
+}) {
+  const cur = currency === "—" ? null : currency;
+  const shown = columns.filter((c) => c.kind !== "later" || c.amount > 0.01);
+  const max = Math.max(...shown.filter((c) => c.kind === "past" || c.kind === "now").map((c) => c.amount), 1);
+  const weeks = columns.filter((c) => c.kind === "past" || c.kind === "now");
+  const sumOf = (list: ReceivedColumn[]) => list.reduce((s, c) => s + c.amount, 0);
+  const now = sumOf(weeks.slice(-1));
+  const last4 = sumOf(weeks.slice(-4));
+  const all = sumOf(weeks);
+  const nodate = sumOf(columns.filter((c) => c.kind === "nodate"));
+
+  // the dashboard's own "pending only" view must not hide the cleared
+  // invoices a receipt belongs to, so the link carries no open filter
+  const base = { ...filters, sort: undefined, dir: undefined, open: undefined, currency: cur ?? filters.currency };
+  const hrefFor = (c: ReceivedColumn): string | null => {
+    if (c.amount <= 0.01 || !c.invoices || c.kind === "nodate") return null;
+    const extra: Record<string, string> = { dateField: "receipt" };
+    if (c.from) extra.from = c.from;
+    if (c.to) extra.to = c.to;
+    return `${ROUTES.search}?${toQuery(base, extra)}`;
+  };
+
+  return (
+    <section className="rounded-2xl border border-[var(--color-line)] bg-white p-5">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+        <Eyebrow>Received · week by week · {currency}</Eyebrow>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[var(--color-ink-3)]">
+          <span>
+            this week <strong className="text-[var(--color-ink)]">{money(now, cur)}</strong>
+          </span>
+          <span>
+            last 4 weeks <strong className="text-[var(--color-ok-fg)]">{money(last4, cur)}</strong>
+          </span>
+          <span>
+            last {weeks.length} weeks <strong className="text-[var(--color-ok-fg)]">{money(all, cur)}</strong>
+          </span>
+          {nodate > 0.01 && (
+            <span>
+              no date <strong className="text-[var(--color-warn-fg)]">{money(nodate, cur)}</strong>
+            </span>
+          )}
+        </div>
+      </div>
+      <p className="mb-3 text-[11px] text-[var(--color-ink-3)]">
+        What came in, by the week it was received, Monday to Sunday — every receipt, on cleared
+        invoices too, and money booked on account. Click a week for the invoices paid in it.
+      </p>
+
+      <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-8 xl:grid-cols-15">
+        {shown.map((c) => {
+          const ratio = c.amount / max;
+          const has = c.amount > 0.01;
+          let style: React.CSSProperties | undefined;
+          let cls = "border border-[var(--color-line)] bg-[#f6f8fb] text-[var(--color-ink-3)]";
+          if (has && c.kind === "nodate") {
+            cls = "border-2 border-dashed border-[#e2b34d] bg-[var(--color-warn-bg)] text-[var(--color-warn-fg)]";
+          } else if (has && (c.kind === "earlier" || c.kind === "later")) {
+            cls = "border border-[#bfe3cb] bg-[var(--color-ok-bg)] text-[var(--color-ok-fg)]";
+          } else if (has) {
+            style = { background: `rgba(26, 127, 67, ${0.14 + 0.7 * Math.min(1, ratio)})` };
+            cls = `border border-transparent ${ratio > 0.45 ? "text-white" : "text-[var(--color-ok-fg)]"}`;
+          }
+          if (c.kind === "now") cls += " ring-2 ring-[var(--color-brand)] ring-offset-1";
+
+          const box = (
+            <div
+              className={`flex h-14 items-center justify-center rounded-lg px-1 text-[12px] font-semibold tabular-nums ${cls}`}
+              style={style}
+            >
+              {has ? compactMoney(c.amount, cur) : c.kind === "now" ? "now" : ""}
+            </div>
+          );
+          const href = hrefFor(c);
+          const title =
+            `${c.label}${c.from && c.to ? ` (${c.from} – ${c.to})` : ""}: ${money(c.amount, cur)} ` +
+            `in ${c.receipts} receipt(s)${c.invoices ? ` against ${c.invoices} invoice(s)` : ""}`;
+          return (
+            <div key={c.key} className="min-w-0" title={title}>
+              {href ? (
+                <Link href={href} className="block transition-transform hover:-translate-y-0.5">
+                  {box}
+                </Link>
+              ) : (
+                box
+              )}
+              <div
+                className={`mt-1 truncate text-center text-[10px] ${c.kind === "now" ? "font-bold text-[var(--color-brand)]" : "text-[var(--color-ink-3)]"}`}
+              >
+                {c.label}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] text-[var(--color-ink-3)]">
+        <Legend swatch="bg-[rgba(26,127,67,0.6)]">received</Legend>
+        <Legend swatch="ring-2 ring-[var(--color-brand)] bg-white">this week</Legend>
+        <Legend swatch="border border-[#bfe3cb] bg-[var(--color-ok-bg)]">earlier</Legend>
+        <Legend swatch="border border-dashed border-[#e2b34d] bg-[var(--color-warn-bg)]">no receipt date</Legend>
         <span>darker = more money</span>
       </div>
     </section>

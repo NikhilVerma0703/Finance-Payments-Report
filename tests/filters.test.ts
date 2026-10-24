@@ -24,8 +24,10 @@ const rows = [
 const ids = (f: Record<string, string>) => filterInvoices(rows, f).map((i) => i.id).sort();
 
 describe("Date Range On", () => {
-  it("offers exactly Invoice Date, Due Date and Overdue Date", () => {
-    expect(Object.values(DATE_FIELDS)).toEqual(["Invoice Date", "Due Date", "Overdue Date"]);
+  it("offers exactly Invoice Date, Due Date, Overdue Date and Receipt Date", () => {
+    // Receipt Date (24 Oct 2026) is what a week of the dashboard's received
+    // timeline opens: the invoices with a receipt dated in it
+    expect(Object.values(DATE_FIELDS)).toEqual(["Invoice Date", "Due Date", "Overdue Date", "Receipt Date"]);
   });
 
   it("filters by invoice date", () => {

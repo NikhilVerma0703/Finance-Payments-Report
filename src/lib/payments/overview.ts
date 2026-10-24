@@ -184,6 +184,99 @@ export function dueByWeek(
   return columns;
 }
 
+// ---------------------------------------------------------------------------
+// What came in, week by week
+// ---------------------------------------------------------------------------
+
+export type ReceivedKind = "earlier" | "past" | "now" | "later" | "nodate";
+
+export interface ReceivedColumn {
+  key: string;
+  kind: ReceivedKind;
+  /** "19 Oct", or "Earlier", "This week", "Later", "No date". */
+  label: string;
+  /** The Monday and Sunday of the week, for a link to those invoices. */
+  from: string | null;
+  to: string | null;
+  amount: number;
+  /** How many receipts came in, money booked on account included. */
+  receipts: number;
+  /** How many invoices they were received against. */
+  invoices: number;
+}
+
+/**
+ * What came in, laid out by the week it was received, Monday to Sunday — the
+ * received side of the falling-due strip (owner, 24 Oct 2026: "we should have
+ * Received timeline too on dashboard").
+ *
+ * Every receipt on an invoice counts by its own date, cleared invoices
+ * included: it is a record of money in, not of what is still owed. Money still
+ * on account counts by the date it was booked (the part already attributed is
+ * among the invoices' receipts). `back` weeks before this one are shown one by
+ * one, with everything before them in "Earlier"; a receipt dated after this
+ * week (a typing slip, usually) goes in "Later", and one with no date has its
+ * own column, so the strip always adds up to everything received.
+ */
+export function receivedByWeek(
+  invoices: TrackedInvoice[],
+  onAccount: OnAccountEntry[],
+  today: string,
+  back = 12,
+): ReceivedColumn[] {
+  const thisWeek = weekStart(today);
+  const firstShown = addDays(thisWeek, -7 * back);
+  const lastShown = addDays(thisWeek, 6);
+  const columns: ReceivedColumn[] = [
+    { key: "earlier", kind: "earlier", label: "Earlier", from: null, to: addDays(firstShown, -1), amount: 0, receipts: 0, invoices: 0 },
+  ];
+  for (let w = -back; w <= 0; w += 1) {
+    const from = addDays(thisWeek, 7 * w);
+    columns.push({
+      key: from,
+      kind: w === 0 ? "now" : "past",
+      label: w === 0 ? "This week" : short(from),
+      from,
+      to: addDays(from, 6),
+      amount: 0,
+      receipts: 0,
+      invoices: 0,
+    });
+  }
+  columns.push({ key: "later", kind: "later", label: "Later", from: addDays(lastShown, 1), to: null, amount: 0, receipts: 0, invoices: 0 });
+  columns.push({ key: "nodate", kind: "nodate", label: "No date", from: null, to: null, amount: 0, receipts: 0, invoices: 0 });
+
+  const byKey = new Map(columns.map((c) => [c.key, c]));
+  const columnFor = (date: string | null): ReceivedColumn => {
+    if (!date) return byKey.get("nodate")!;
+    if (date < firstShown) return byKey.get("earlier")!;
+    if (date > lastShown) return byKey.get("later")!;
+    return byKey.get(weekStart(date))!;
+  };
+
+  for (const i of invoices) {
+    const touched = new Set<string>();
+    for (const r of i.money.receipts) {
+      const amount = r.amountFcy ?? 0;
+      if (!amount) continue;
+      const col = columnFor(r.receiptDate);
+      col.amount = round2(col.amount + amount);
+      col.receipts += 1;
+      if (!touched.has(col.key)) {
+        col.invoices += 1;
+        touched.add(col.key);
+      }
+    }
+  }
+  for (const e of onAccount) {
+    if (e.kind !== "RECEIPT" || e.unattributed <= 0) continue;
+    const col = columnFor(e.entryDate);
+    col.amount = round2(col.amount + e.unattributed);
+    col.receipts += 1;
+  }
+  return columns;
+}
+
 /** Days left in the month, and how far through it today is, for the month card. */
 export function monthProgress(today: string): { day: number; days: number; pct: number } {
   const [y, m, d] = today.split("-").map(Number);

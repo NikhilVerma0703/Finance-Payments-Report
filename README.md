@@ -33,13 +33,13 @@ The database is the file `prisma/dev.db`. Copy it to back up your data. The
 
 | # | Section | What it is for |
 |---|---------|----------------|
-| 1 | **Dashboard** | The receivables overview: a *Needs attention* strip, then per currency a collection gauge with receipts by month and the KPI cards (invoice value, received, outstanding, overdue, needs attention, net outstanding). The customer-wise summary sits right below them — S. No., a **PDF** of each customer's outstanding sheet, and a currency dropdown per row. Then the balance falling due week by week, the ageing and the biggest balances. Click any card, week or status to see those invoices. |
-| 2 | **Master Table** | Every invoice in the full table, grouped by customer. A customer's name opens **Adjust payment of this customer**; **Edit / Add extra information** opens its invoices with what each is missing. |
-| 3 | **Search Invoices** | Every filter: search by invoice number or customer, customer, currency, status, ageing, PO number, payment terms, *Date Range On* (Invoice Date, Due Date, Overdue Date) with From/To, group by, outstanding only, needs attention, nothing received, requires verification. Apply and Reset. With no filter, every record is shown. |
+| 1 | **Dashboard** | The receivables overview, over the **pending invoices** by default (a switch at the top shows all invoices): a *Needs attention* strip, then per currency a collection gauge with receipts by month and the KPI cards (invoice value, received, outstanding, overdue, needs attention, net outstanding). The customer-wise summary sits right below them — S. No., a **PDF** of each customer's outstanding sheet, and a currency dropdown per row. Then the balance **falling due** week by week and what was **received** week by week (every receipt, cleared invoices too), the ageing and the biggest balances. At the foot, **All invoices — cleared and pending**, folded until opened. Click any card, week or status to see those invoices. |
+| 2 | **Master Table** | The **pending invoices** in the full table, grouped by customer (a switch shows all invoices), with every invoice — cleared and pending — in a folded table at the foot. A customer's name opens **Adjust payment of this customer**; **Edit / Add extra information** opens its invoices with what each is missing. |
+| 3 | **Search Invoices** | Every filter: search by invoice number or customer, customer, currency, status, ageing, PO number, payment terms, *Date Range On* (Invoice Date, Due Date, Overdue Date, Receipt Date) with From/To, group by, outstanding only, needs attention, nothing received, requires verification. Apply and Reset. With no filter, every record is shown. |
 | 4 | **Upload Sheet** | Upload a customer payment sheet. Each upload lists its invoices with **EDIT OR ADD EXTRA INFORMATIONS** and **Delete**; a whole upload can be deleted together with the invoices that belong to it alone. |
 | 5 | **New Record** | The full entry form in ten sections — customer, invoice, parties, terms and dates, shipping, currency, receipts (as many as needed), credit/debit notes, books balances, remarks. No field is required. |
 | 6 | **Reports & Downloads Sheets** | Choose records by customer, invoice number, ageing, PO number and a date range, check them, then **Export Sheet** to a formatted Excel report. |
-| 7 | **Settings & Rules** | Payment terms recognised, your own payment-term rules, the status thresholds, and every formula with a live worked example. |
+| 7 | **Settings & Rules** | Payment terms recognised, your own payment-term rules, the status thresholds — the **default credit period** (150 days) among them — and every formula with a live worked example. |
 
 Each invoice also has its own screen (from any invoice number) and each
 customer has a screen with an editable payment register, **Adjust payment of
@@ -61,9 +61,15 @@ add extra information**, every invoice with what it is missing.
   (`src/server/payments/recordActions.ts`). The figures beside the boxes are
   calculated as you type by the same functions. Every change is recorded in the
   invoice's correction history.
-- **Nothing missing is invented.** Without the date a payment term counts from,
-  there is no due date and the invoice is marked *Requires verification* — never
-  reported as late.
+- **The default credit period.** Without a due date from the terms — none
+  recorded, wording not recognised, or the date they count from (usually the BL
+  date) missing — an invoice falls due 150 days after its invoice date and is
+  *Overdue* after that. Every screen labels such a due date *default*. The
+  period is set in Settings & Rules; at 0 there is no default, and an undated
+  invoice is marked *Requires verification* instead of late.
+- **Pending by default.** The dashboard and the Master Table show the invoices
+  not yet paid in full (`?show=all` shows every invoice); what came in — the
+  receipts by month and the received timeline — always counts every receipt.
 - **Payment-term rules** (`pt_term_rules`) are checked before the built-in
   readings, so a wording can be given its exact meaning once and every invoice,
   summary and export follows.
@@ -94,7 +100,8 @@ calculation rules**.
 - Forex gain/loss (INR) = rate difference × receipt amount
 - Value in INR = amount × that invoice's own exchange rate
 - Due date = basis date + days, per portion of the terms; the invoice's due
-  date is the next portion still owing; an entered due date is used as entered
+  date is the next portion still owing; an entered due date is used as entered;
+  with no date from the terms, invoice date + the default credit period (150 days)
 - Overdue days = today − due date; Overdue date = due date + 1 day
 - Ageing (open invoices, each in one category): No due date, Not yet due,
   1–30, 31–60, 61–90, Over 90 days

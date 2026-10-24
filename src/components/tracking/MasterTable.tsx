@@ -344,6 +344,9 @@ function Row({ invoice, index }: { invoice: TrackedInvoice; index: number }) {
               {s.dueDateSource === "entered" && (
                 <div className="text-[10px] text-[var(--color-warn-fg)]">as entered</div>
               )}
+              {s.dueDateSource === "default" && (
+                <div className="text-[10px] text-[var(--color-warn-fg)]">default — terms give none</div>
+              )}
             </>
           ) : (
             <span className="text-[var(--color-warn-fg)]">needs verification</span>
@@ -354,7 +357,9 @@ function Row({ invoice, index }: { invoice: TrackedInvoice; index: number }) {
             ? BASIS_LABELS[s.milestones[0].basis]
             : s.dueDateSource === "entered"
               ? "entered"
-              : "—"}
+              : s.dueDateSource === "default"
+                ? "invoice date (default)"
+                : "—"}
         </td>
         <td
           className={`${cell} tabular-nums ${late ? "font-semibold text-[var(--color-bad-fg)]" : "text-[var(--color-ink-3)]"}`}

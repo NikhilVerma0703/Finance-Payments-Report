@@ -180,7 +180,9 @@ export default async function SettingsPage({
             </div>
             <p className="mt-2 text-[11px] text-[var(--color-ink-3)]">
               Spelling, capitals and spacing do not matter. A wording not recognised gives no due
-              date and is marked <em>Requires verification</em> — add a rule below to define it.
+              date of its own: the invoice falls due {params.defaultDueDays || "—"} day(s) after its
+              invoice date (the default credit period
+              {params.defaultDueDays ? "" : ", switched off — then it is marked Requires verification"}) — add a rule below to define it.
             </p>
           </div>
 
@@ -470,8 +472,11 @@ export default async function SettingsPage({
         <p className="mb-4 text-[12px] text-[var(--color-ink-2)]">
           Every figure is calculated from the stored fields each time it is shown, by one set of
           functions, so the dashboard, Search, the invoice and customer screens and every export
-          always agree. Nothing missing is invented: without the date a term counts from, there is
-          no due date, and the invoice is marked <em>Requires verification</em> rather than late.
+          always agree. Without the date a term counts from, or without terms the engine can read,
+          the default credit period stands in: the invoice falls due {params.defaultDueDays} day(s)
+          after its invoice date, and every screen labels that due date <em>default</em>. With the
+          default set to 0, or no invoice date either, there is no due date and the invoice is marked{" "}
+          <em>Requires verification</em> rather than late.
           The examples use one sample invoice — USD 10,000 at {rate(83)}, terms &ldquo;70% Cash Against
           Documents (CAD), Balance 30% at 90 Days&rdquo;, documents presented {day(docs)}, BL {day(bl)},
           one receipt of USD 6,800 at {rate(83.5)}, a credit note of USD 200 and a debit note of USD 50 —
@@ -516,8 +521,9 @@ export default async function SettingsPage({
           <Formula title="Overdue days, overdue date and ageing" formula="Overdue days = today − due date   ·   Overdue date = due date + 1 day">
             <p>
               Ageing places every invoice that still owes money in exactly one category by its overdue
-              days: {ageingOrder(params.ageingBuckets).join(", ")}. An invoice with no due date is never
-              put in an overdue category. Paid invoices are <em>Settled</em>.
+              days: {ageingOrder(params.ageingBuckets).join(", ")}. An invoice dated by the default
+              credit period is aged like any other; one with no due date at all is never put in an
+              overdue category. Paid invoices are <em>Settled</em>.
             </p>
             <p>
               The overdue date is the day an invoice became overdue; only invoices still owing money
@@ -598,7 +604,10 @@ export default async function SettingsPage({
               <li>No invoice value → <em>{STATUS_LABELS.NO_VALUE}</em></li>
               <li>Received more than the value → <em>{STATUS_LABELS.OVERPAID}</em></li>
               <li>Nothing outstanding → <em>{STATUS_LABELS.PAID}</em></li>
-              <li>No due date can be established → <em>{STATUS_LABELS.REQUIRES_VERIFICATION}</em></li>
+              <li>
+                No due date can be established, not even by the default ({params.defaultDueDays} day(s) after the
+                invoice date) → <em>{STATUS_LABELS.REQUIRES_VERIFICATION}</em>
+              </li>
               <li>Any portion past its due date → <em>{STATUS_LABELS.OVERDUE}</em></li>
               <li>Due within {params.dueSoonDays} day(s) → <em>{STATUS_LABELS.DUE_SOON}</em></li>
               <li>Under {params.nearlySettledPct}% left → <em>{STATUS_LABELS.NEARLY_SETTLED}</em></li>

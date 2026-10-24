@@ -606,7 +606,7 @@ export interface TrackingFilters {
   term?: string;
   from?: string;
   to?: string;
-  /** invoice | due | overdue — see DATE_FIELDS. */
+  /** invoice | due | overdue | receipt — see DATE_FIELDS. */
   dateField?: string;
   attention?: string;
   nilReceived?: string;
@@ -626,11 +626,15 @@ export interface TrackingFilters {
  *                 invoice that still owes money past that date. An invoice that
  *                 is not overdue has no overdue date and is left out of a range
  *                 on it.
+ *   Receipt Date  the date of any of its receipts — an invoice paid in two
+ *                 instalments is in a range that holds either one. What the
+ *                 dashboard's received timeline links to.
  */
 export const DATE_FIELDS = {
   invoice: "Invoice Date",
   due: "Due Date",
   overdue: "Overdue Date",
+  receipt: "Receipt Date",
 } as const;
 
 export type DateField = keyof typeof DATE_FIELDS;
@@ -643,6 +647,7 @@ export function isDateField(v: string | null | undefined): v is DateField {
 export function dateFor(i: TrackedInvoice, field: DateField): string | null {
   if (field === "due") return i.schedule.dueDate;
   if (field === "overdue") return i.overdueSince;
+  if (field === "receipt") return i.lastReceiptDate;
   return i.invoiceDate;
 }
 
@@ -712,6 +717,23 @@ export function toQuery(f: TrackingFilters, extra: Record<string, string> = {}):
 }
 
 /**
+ * Pending: not yet paid in full. The dashboard and the Master Table show these
+ * alone unless asked for every invoice (owner, 24 Oct 2026: "Only pending
+ * invoices should show as default"), with every invoice in a folded table
+ * below. An invoice with no value is pending — nobody can call it cleared —
+ * and so is one nearly settled: a residue is still owed.
+ */
+export function isPending(i: TrackedInvoice): boolean {
+  return i.status !== "PAID" && i.status !== "OVERPAID";
+}
+
+/** `?show=all` turns the pending-only view off. Not a filter: Search and the
+ *  exports never see it. */
+export function showsAll(v: string | string[] | undefined): boolean {
+  return (Array.isArray(v) ? v[0] : v) === "all";
+}
+
+/**
  * Apply the filter bar.
  *
  * In memory, deliberately: outstanding, status, ageing and "needs attention"
@@ -741,10 +763,9 @@ export function filterInvoices(rows: TrackedInvoice[], f: TrackingFilters): Trac
     if (inv && !(i.invoiceNo ?? "").toLowerCase().includes(inv)) return false;
 
     if (f.from || f.to) {
-      const date = dateFor(i, field);
-      if (!date) return false;
-      if (f.from && date < f.from) return false;
-      if (f.to && date > f.to) return false;
+      const inRange = (date: string | null) => !!date && (!f.from || date >= f.from) && (!f.to || date <= f.to);
+      // any of its receipts, not only the last one
+      if (field === "receipt" ? !i.receipts.some((r) => inRange(r.receiptDate ?? null)) : !inRange(dateFor(i, field))) return false;
     }
 
     if (q) {

@@ -17,7 +17,7 @@ import Link from "next/link";
 import { STATUS_LABELS, STATUS_TONE, type TrackedInvoice, type TrackingStatus } from "@/lib/payments/record";
 import { HOME_CURRENCY } from "@/lib/money";
 import type { OnAccountEntry } from "@/lib/payments/onAccount";
-import { dueByWeek, monthToDate, receiptsByMonth } from "@/lib/payments/overview";
+import { dueByWeek, monthToDate, receiptsByMonth, receivedByWeek } from "@/lib/payments/overview";
 import { ROUTES } from "@/lib/routes";
 import {
   toQuery,
@@ -26,7 +26,7 @@ import {
   type TrackingKpis,
 } from "@/server/payments/query";
 import { homeMoney, kpiMoney, money, TONE_CLASS } from "./bits";
-import { DueStrip, Eyebrow, Ring, ShareBar, Sparkline, Stat, TopBalances } from "./Overview";
+import { DueStrip, Eyebrow, ReceivedStrip, Ring, ShareBar, Sparkline, Stat, TopBalances } from "./Overview";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const monthName = (ym: string) => `${MONTHS[Number(ym.slice(5, 7)) - 1]} ${ym.slice(2, 4)}`;
@@ -43,13 +43,18 @@ export function Dashboard({
   kpis,
   today,
   invoices,
+  receiptsFrom,
   onAccount,
   filters,
 }: {
   kpis: TrackingKpis[];
   today: string;
-  /** The invoices the KPIs were worked out from, for the month-by-month figures. */
+  /** The invoices the KPIs were worked out from. */
   invoices: TrackedInvoice[];
+  /** Every invoice in view, cleared ones too, for what came in month by month —
+   *  the KPIs may be over the pending invoices alone, and a receipt on an
+   *  invoice since cleared is still money that came in. Defaults to `invoices`. */
+  receiptsFrom?: TrackedInvoice[];
   onAccount: OnAccountEntry[];
   /** The filters in force, carried into every drill-down link. */
   filters: TrackingFilters;
@@ -95,7 +100,7 @@ export function Dashboard({
         const cur = k.currency === "—" ? null : k.currency;
         const coverage =
           k.totalOutstanding > 0.01 ? Math.round((k.assessable / k.totalOutstanding) * 100) : 100;
-        const list = inCurrency(invoices, k.currency);
+        const list = inCurrency(receiptsFrom ?? invoices, k.currency);
         const held = inCurrency(onAccount, k.currency);
         const months = receiptsByMonth(list, held, today);
         const mtd = monthToDate(list, held, today);
@@ -277,6 +282,8 @@ export function AgeingSummary({
   kpis,
   filters,
   invoices,
+  receiptsFrom,
+  onAccount = [],
   customers,
   today,
 }: {
@@ -284,6 +291,11 @@ export function AgeingSummary({
   /** The filters in force, carried into every drill-down link. */
   filters: TrackingFilters;
   invoices: TrackedInvoice[];
+  /** Every invoice in view, cleared ones too, for the received timeline.
+   *  Defaults to `invoices`. */
+  receiptsFrom?: TrackedInvoice[];
+  /** Money on account, for the received timeline. */
+  onAccount?: OnAccountEntry[];
   customers: CustomerSummary[];
   today: string;
 }) {
@@ -297,11 +309,14 @@ export function AgeingSummary({
         const a = k.ageingSummary;
         const cur = k.currency === "—" ? null : k.currency;
         const weeks = dueByWeek(inCurrency(invoices, k.currency), today);
+        const received = receivedByWeek(inCurrency(receiptsFrom ?? invoices, k.currency), inCurrency(onAccount, k.currency), today);
         const total = a.buckets.reduce((s, b) => s + b.amount, 0);
 
         return (
           <section key={k.currency} className="space-y-4">
             {a.openInvoices > 0 && <DueStrip columns={weeks} currency={k.currency} filters={filters} />}
+            {/* what fell due beside what came in (owner, 24 Oct 2026) */}
+            {received.some((c) => c.amount > 0.01) && <ReceivedStrip columns={received} currency={k.currency} filters={filters} />}
 
             <div className="grid gap-4 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
               <section className="rounded-2xl border border-[var(--color-line)] bg-white p-5">

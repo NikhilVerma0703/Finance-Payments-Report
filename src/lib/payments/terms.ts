@@ -485,8 +485,12 @@ export interface ResolvedMilestone extends Milestone {
   amount: number | null;
   basisDate: string | null;
   dueDate: string | null;
-  /** Why there is no due date. Null when there is one. */
+  /** Why there is no due date — or, where the default stands in for one, why
+   *  it does. Null when the terms give the date. */
   pending: string | null;
+  /** The due date is the default (invoice date + the default credit period),
+   *  because the date the portion counts from is not recorded. */
+  assumed: boolean;
   settled: number;
   outstanding: number;
   overdueDays: number | null;
@@ -498,7 +502,9 @@ export interface Schedule {
   milestones: ResolvedMilestone[];
   /** The invoice's single due date: the next portion that still owes money. */
   dueDate: string | null;
-  dueDateSource: "entered" | "calculated" | "none";
+  /** "default": nothing recorded gives a due date, so the invoice falls due
+   *  the default credit period after its invoice date. */
+  dueDateSource: "entered" | "calculated" | "default" | "none";
   /** One line explaining the due date, for the column's tooltip. */
   dueDateNote: string;
   /** Days past `dueDate`. Negative before it, null without one. */
@@ -535,11 +541,24 @@ export function buildSchedule(args: {
   today?: string;
   /** Rules defined in Settings & Rules, checked before the built-in readings. */
   rules?: TermRule[];
+  /**
+   * The default credit period, in days from the invoice date (Settings &
+   * Rules; owner, 24 Oct 2026: "Any invoice over 150 days from the invoice
+   * date must be marked as overdue"). It stands in wherever nothing recorded
+   * gives a due date — no terms, wording nobody could read, or the date a
+   * portion counts from (usually the BL date) not recorded — so such an
+   * invoice falls due, and is overdue once that many days have passed, rather
+   * than waiting for verification forever. 0 or absent: no default.
+   */
+  defaultDueDays?: number;
 }): Schedule {
   const today = args.today ?? todayIso();
   const dueSoon = args.dueSoonDays ?? 7;
   const term = readTerm(args.paymentTerms, args.rules ?? []);
   const reasons: string[] = [];
+  const invoiceDate = args.basisDates.INVOICE_DATE ?? null;
+  const defaultDays = args.defaultDueDays && args.defaultDueDays > 0 ? args.defaultDueDays : 0;
+  const fallback = defaultDays && invoiceDate ? addDays(invoiceDate, defaultDays) : null;
 
   const amounts =
     args.invoiceValue === null
@@ -548,12 +567,15 @@ export function buildSchedule(args: {
 
   const planned = term.milestones.map((m, i) => {
     const basisDate = args.basisDates[m.basis] ?? null;
-    const dueDate = basisDate ? addDays(basisDate, m.days) : null;
+    const assumed = !basisDate && fallback !== null;
+    const dueDate = basisDate ? addDays(basisDate, m.days) : fallback;
     const pending = basisDate
       ? null
-      : `${m.label} — the ${BASIS_LABELS[m.basis]} is not recorded, so this portion has no due date.`;
+      : assumed
+        ? `${m.label} — the ${BASIS_LABELS[m.basis]} is not recorded, so this portion is taken as due ${defaultDays} days after the invoice date (the default).`
+        : `${m.label} — the ${BASIS_LABELS[m.basis]} is not recorded, so this portion has no due date.`;
     if (pending) reasons.push(pending);
-    return { ...m, amount: amounts[i], basisDate, dueDate, pending };
+    return { ...m, amount: amounts[i], basisDate, dueDate, pending, assumed };
   });
 
   // ---- apply money to the earliest portion first
@@ -598,6 +620,12 @@ export function buildSchedule(args: {
     dueDateNote =
       "Entered rather than calculated. Whatever date the term implies, this is the date the " +
       "business is working to — and it cannot be checked, because the basis it came from is not recorded.";
+  } else if (anchor?.dueDate && anchor.assumed) {
+    dueDate = anchor.dueDate;
+    dueDateSource = "default";
+    dueDateNote =
+      `The ${BASIS_LABELS[anchor.basis]} is not recorded, so the default applies: invoice date ${invoiceDate} + ${defaultDays} days.` +
+      (milestones.length > 1 ? ` This portion is ${anchor.percent}% of the invoice.` : "");
   } else if (anchor?.dueDate) {
     dueDate = anchor.dueDate;
     dueDateSource = "calculated";
@@ -606,6 +634,13 @@ export function buildSchedule(args: {
       (milestones.length > 1
         ? ` — ${anchor.outstanding > 0.01 ? "the next portion still owing" : "the last portion"} is ${anchor.percent}% of the invoice.`
         : ".");
+  } else if (fallback && !milestones.length) {
+    // no portion to date at all: no terms, or wording nobody could read
+    dueDate = fallback;
+    dueDateSource = "default";
+    dueDateNote =
+      (term.unknown && args.paymentTerms ? `The payment term "${args.paymentTerms}" was not recognised` : "No payment terms are recorded") +
+      `, so the default applies: invoice date ${invoiceDate} + ${defaultDays} days.`;
   } else {
     dueDate = null;
     dueDateSource = "none";
@@ -625,8 +660,8 @@ export function buildSchedule(args: {
     dueDateSource,
     dueDateNote,
     overdueDays: dueDate ? daysBetween(dueDate, today) : null,
-    overdueAmount: entered
-      ? // with an entered date there are no portions to speak of; the whole
+    overdueAmount: entered || (dueDateSource === "default" && !milestones.length)
+      ? // with an entered date (or the default, with no portions) there are no portions to speak of; the whole
         // outstanding balance is late once that date has passed. Worked out from
         // the value and what is settled rather than from the portions, because
         // an entered date needs no recognised term — and with no term there are

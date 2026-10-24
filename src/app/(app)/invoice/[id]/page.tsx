@@ -163,7 +163,7 @@ export default async function InvoiceDetailPage({
                   <span key="d" title={s.dueDateNote}>
                     {day(s.dueDate)}{" "}
                     <span className="text-[var(--color-ink-3)]">
-                      ({s.dueDateSource === "entered" ? "entered" : "calculated"})
+                      ({s.dueDateSource === "entered" ? "entered" : s.dueDateSource === "default" ? "default credit period" : "calculated"})
                     </span>
                   </span>
                 ) : (

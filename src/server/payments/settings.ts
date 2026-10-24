@@ -33,6 +33,15 @@ export const PARAM_FIELDS = [
     integer: false,
   },
   {
+    key: "defaultDueDays",
+    label: "Default credit period (days)",
+    help:
+      "An invoice whose terms give no due date — none recorded, not recognised, or the date they count from (usually the BL date) missing — falls due this many days after its invoice date, and is Overdue after that. 0 turns the default off.",
+    min: 0,
+    max: 3650,
+    integer: true,
+  },
+  {
     key: "attentionAfterDays",
     label: "Flag undated invoices after (days)",
     help: "An invoice with nothing received and no due date is flagged once it is this old.",

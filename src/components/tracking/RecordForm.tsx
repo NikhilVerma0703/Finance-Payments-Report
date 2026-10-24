@@ -778,7 +778,7 @@ function TermsPreview({ p }: { p: TrackedInvoice }) {
           {s.dueDate ? (
             <strong>
               {day(s.dueDate)}
-              {s.dueDateSource === "entered" ? " (entered)" : ""}
+              {s.dueDateSource === "entered" ? " (entered)" : s.dueDateSource === "default" ? " (default credit period)" : ""}
               {p.overdueDays !== null && p.overdueDays > 0 && (p.money.calculatedOutstanding ?? 0) > 0.01
                 ? ` · ${p.overdueDays} day(s) overdue`
                 : ""}

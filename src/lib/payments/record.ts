@@ -183,6 +183,9 @@ export interface TrackingParams {
   ageingBuckets: number[];
   /** An unpaid invoice older than this with no due date still needs attention. */
   attentionAfterDays: number;
+  /** An invoice nothing recorded can date falls due this many days after its
+   *  invoice date — overdue after it. 0: no default. */
+  defaultDueDays: number;
 }
 
 export const TRACKING_DEFAULTS: TrackingParams = {
@@ -190,6 +193,9 @@ export const TRACKING_DEFAULTS: TrackingParams = {
   nearlySettledPct: 2,
   ageingBuckets: [30, 60, 90],
   attentionAfterDays: 90,
+  // owner, 24 Oct 2026: "Any invoice over 150 days from the invoice date must
+  // be marked as overdue. (Default overdue time)"
+  defaultDueDays: 150,
 };
 
 /** The fields whose absence stops something being calculated. */
@@ -242,6 +248,7 @@ export function buildTrackedInvoice(
     dueSoonDays: params.dueSoonDays,
     today,
     rules: opts.rules,
+    defaultDueDays: params.defaultDueDays,
   });
 
   const overdueDays = schedule.overdueDays;
@@ -414,6 +421,10 @@ function attention(args: {
         schedule.verificationReasons[0] ??
           "No due date could be worked out, so this invoice cannot be assessed",
       );
+    }
+    // the default is a stand-in: the real date is still worth recording
+    if (schedule.dueDateSource === "default") {
+      reasons.push(`Due date assumed: ${schedule.dueDateNote}`);
     }
     if (
       money.totalReceived <= 0.01 &&

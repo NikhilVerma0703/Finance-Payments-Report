@@ -26,7 +26,7 @@ import {
   ageingLabels,
 } from "@/lib/payments/money";
 import { parseRemittance, readPaymentSheet, type SheetRead } from "@/lib/payments/sheetReader";
-import { buildTrackedInvoice, type TrackedInvoiceInput } from "@/lib/payments/record";
+import { buildTrackedInvoice, TRACKING_DEFAULTS, type TrackedInvoiceInput } from "@/lib/payments/record";
 
 const FIXTURES = path.join(process.cwd(), "tests", "fixtures");
 
@@ -440,10 +440,10 @@ describe("a whole tracked invoice", () => {
     expect(t.money.totalForexGainLoss).toBeCloseTo(13999, 0);
   });
 
-  it("says Requires verification rather than Overdue when no date can be worked out", () => {
+  it("says Requires verification rather than Overdue when no date can be worked out and the default is off", () => {
     const t = buildTrackedInvoice(
       { ...base, paymentTerms: null, blDate: null, enteredDueDate: null },
-      { today },
+      { today, params: { ...TRACKING_DEFAULTS, defaultDueDays: 0 } },
     );
     expect(t.schedule.dueDate).toBeNull();
     expect(t.status).toBe("REQUIRES_VERIFICATION");
