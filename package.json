@@ -19,6 +19,7 @@
     "@prisma/client": "6.19.3",
     "exceljs": "4.4.0",
     "next": "15.5.25",
+    "pdf-lib": "1.17.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "^0.0.1"

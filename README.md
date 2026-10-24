@@ -29,21 +29,24 @@ Then open <http://localhost:3000>.
 The database is the file `prisma/dev.db`. Copy it to back up your data. The
 `.env` file holds `DATABASE_URL="file:./dev.db"` and `HOME_CURRENCY="INR"`.
 
-## The six sections
+## The seven sections
 
 | # | Section | What it is for |
 |---|---------|----------------|
-| 1 | **Dashboard & Master Table** | The receivables overview: a *Needs attention* strip, then per currency a collection gauge with receipts by month and the KPI cards (invoice value, received, outstanding, overdue, needs attention, net outstanding). The customer-wise summary sits right below them, where a customer's currency can be set from its row. Then the balance falling due week by week, the ageing and the biggest balances, and every invoice in the full table grouped by customer. Click any card, week or status to see those invoices; click a customer's name to adjust its payments. |
-| 2 | **Search Invoices** | Every filter: search by invoice number or customer, customer, currency, status, ageing, PO number, payment terms, *Date Range On* (Invoice Date, Due Date, Overdue Date) with From/To, group by, outstanding only, needs attention, nothing received, requires verification. Apply and Reset. With no filter, every record is shown. |
-| 3 | **Upload Sheet** | Upload a customer payment sheet. Each upload lists its invoices with **EDIT OR ADD EXTRA INFORMATIONS** and **Delete**; a whole upload can be deleted together with the invoices that belong to it alone. |
-| 4 | **New Record** | The full entry form in ten sections — customer, invoice, parties, terms and dates, shipping, currency, receipts (as many as needed), credit/debit notes, books balances, remarks. No field is required. |
-| 5 | **Reports & Downloads Sheets** | Choose records by customer, invoice number, ageing, PO number and a date range, check them, then **Export Sheet** to a formatted Excel report. |
-| 6 | **Settings & Rules** | Payment terms recognised, your own payment-term rules, the status thresholds, and every formula with a live worked example. |
+| 1 | **Dashboard** | The receivables overview: a *Needs attention* strip, then per currency a collection gauge with receipts by month and the KPI cards (invoice value, received, outstanding, overdue, needs attention, net outstanding). The customer-wise summary sits right below them — S. No., a **PDF** of each customer's outstanding sheet, and a currency dropdown per row. Then the balance falling due week by week, the ageing and the biggest balances. Click any card, week or status to see those invoices. |
+| 2 | **Master Table** | Every invoice in the full table, grouped by customer. A customer's name opens **Adjust payment of this customer**; **Edit / Add extra information** opens its invoices with what each is missing. |
+| 3 | **Search Invoices** | Every filter: search by invoice number or customer, customer, currency, status, ageing, PO number, payment terms, *Date Range On* (Invoice Date, Due Date, Overdue Date) with From/To, group by, outstanding only, needs attention, nothing received, requires verification. Apply and Reset. With no filter, every record is shown. |
+| 4 | **Upload Sheet** | Upload a customer payment sheet. Each upload lists its invoices with **EDIT OR ADD EXTRA INFORMATIONS** and **Delete**; a whole upload can be deleted together with the invoices that belong to it alone. |
+| 5 | **New Record** | The full entry form in ten sections — customer, invoice, parties, terms and dates, shipping, currency, receipts (as many as needed), credit/debit notes, books balances, remarks. No field is required. |
+| 6 | **Reports & Downloads Sheets** | Choose records by customer, invoice number, ageing, PO number and a date range, check them, then **Export Sheet** to a formatted Excel report. |
+| 7 | **Settings & Rules** | Payment terms recognised, your own payment-term rules, the status thresholds, and every formula with a live worked example. |
 
 Each invoice also has its own screen (from any invoice number) and each
-customer has a screen with an editable payment register and **Payments and
-notes on account**: a payment, credit note or debit note booked against the
-customer first and attributed to one or more of its invoices later.
+customer has a screen with an editable payment register, **Adjust payment of
+this customer** — a payment, credit note or debit note recorded against the
+customer with no invoice number, counted in its balance at once and assigned
+to one or more invoices later, with its own adjustment history — and **Edit /
+add extra information**, every invoice with what it is missing.
 
 ## How the parts fit
 
@@ -100,7 +103,7 @@ calculation rules**.
 
 ```
 prisma/schema.prisma           the pt_* tables, term rules and settings
-src/app/(app)/                 the six sections, invoice and customer screens
+src/app/(app)/                 the seven sections, invoice and customer screens
 src/app/api/                   the Excel/CSV downloads
 src/components/tracking/       the screens' building blocks
 src/lib/payments/              pure calculation and parsing — no database

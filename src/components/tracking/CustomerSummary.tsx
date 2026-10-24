@@ -71,7 +71,7 @@ export function CustomerSummary({
   const anyOnAccount = customers.some((c) => Math.abs(c.onAccount) > 0.004);
   const several = byCurrency.size > 1;
   const people = new Set(customers.map((c) => c.id ?? "~none")).size;
-  const columns = 10 + (anyOnAccount ? 2 : 0);
+  const columns = 11 + (anyOnAccount ? 2 : 0);
   let serial = 0;
 
   const th = "px-3 py-2.5 align-bottom font-semibold";
@@ -123,6 +123,9 @@ export function CustomerSummary({
         <table className="w-full min-w-[1080px] border-collapse text-[12.5px]">
           <thead>
             <tr className="border-b border-[var(--color-line)] bg-[#f4f7fa] text-[10.5px] uppercase tracking-[0.06em] text-[var(--color-ink-2)]">
+              <th className={`${th} w-16 whitespace-nowrap text-center`} title="The customer's outstanding sheet, as a PDF">
+                Sheet
+              </th>
               <th className={`${th} w-14 whitespace-nowrap text-center`}>S. No.</th>
               <th className={`${th} text-left`}>Customer</th>
               <th className={`${th} text-left`}>Currency</th>
@@ -190,6 +193,17 @@ export function CustomerSummary({
                       key={`${c.id ?? "none"}-${c.currency}`}
                       className="border-b border-[var(--color-line)] transition-colors hover:bg-[#f8fbfd]"
                     >
+                      <td className={`${td} text-center`}>
+                        {c.id && c.invoices > 0 && (
+                          <a
+                            href={`${ROUTES.customerSheet}?${new URLSearchParams({ customer: c.id, currency: c.currency }).toString()}`}
+                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-[#b9dfd9] bg-white px-2 py-1 text-[11px] font-semibold text-[var(--color-accent)] hover:bg-[#e6f4f2]"
+                            title={`Download ${c.name}'s outstanding sheet (${c.currency}) as a PDF`}
+                          >
+                            ↓ PDF
+                          </a>
+                        )}
+                      </td>
                       <td className={`${td} text-center tabular-nums text-[var(--color-ink-3)]`}>{serial}</td>
                       <td className={`${td} min-w-[220px]`}>
                         {c.id ? (
@@ -271,6 +285,7 @@ export function CustomerSummary({
                   key={`total-${currency}`}
                   className="border-b-2 border-[var(--color-line)] bg-[#f4f7fa] font-semibold"
                 >
+                  <td className={td} />
                   <td className={td} />
                   <td className={td}>
                     {cur ? `Total ${currency}` : "Total — no currency"}

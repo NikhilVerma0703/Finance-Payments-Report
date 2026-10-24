@@ -1,5 +1,5 @@
 /**
- * The six sections down the left-hand side.
+ * The seven sections down the left-hand side.
  *
  * Flat rather than grouped: the whole application is one job — following
  * customer payments — so every screen is one click from every other.
@@ -17,9 +17,15 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   {
     href: ROUTES.dashboard,
-    label: "Dashboard & Master Table",
+    label: "Dashboard",
     key: "dashboard",
-    hint: "KPIs, the customer-wise summary, ageing, and every invoice grouped by customer",
+    hint: "What needs attention, the KPIs, the customer-wise summary, what falls due and ageing",
+  },
+  {
+    href: ROUTES.masterTable,
+    label: "Master Table",
+    key: "master",
+    hint: "Every invoice grouped by customer; a customer's name opens its payments to adjust",
   },
   {
     href: ROUTES.search,

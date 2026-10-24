@@ -22,10 +22,11 @@ function files(dir: string): string[] {
 }
 const SOURCE = files("src").filter((f) => /\.(ts|tsx)$/.test(f));
 
-describe("six sections, in order", () => {
-  it("the navigation is exactly the six sections", () => {
+describe("seven sections, in order", () => {
+  it("the navigation is exactly the seven sections", () => {
     expect(NAV.map((n) => n.label)).toEqual([
-      "Dashboard & Master Table",
+      "Dashboard",
+      "Master Table",
       "Search Invoices",
       "Upload Sheet",
       "New Record",
@@ -89,7 +90,9 @@ describe("each section has what the brief asked for", () => {
     const summary = page.indexOf("<CustomerSummary");
     expect(summary).toBeGreaterThan(page.indexOf("<Dashboard"));
     expect(summary).toBeLessThan(page.indexOf("<AgeingSummary"));
-    expect(summary).toBeLessThan(page.indexOf("<MasterTable"));
+    // the master table is a section of its own now, after the dashboard
+    expect(page).not.toContain("<MasterTable");
+    expect(read("src/app/(app)/master/page.tsx")).toContain("<MasterTable");
   });
 
   it("Search Invoices has the filters, with Apply and Reset", () => {

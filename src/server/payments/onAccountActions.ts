@@ -118,7 +118,11 @@ export async function saveOnAccountAction(form: FormData): Promise<void> {
     values: data,
     labels: LABELS,
   });
-  back(form, where(customerId), `${ON_ACCOUNT_LABELS[created.kind as OnAccountKind] ?? "Entry"} added on account.`);
+  back(
+    form,
+    where(customerId),
+    `${ON_ACCOUNT_LABELS[created.kind as OnAccountKind] ?? "Entry"} recorded against the customer, not yet assigned to an invoice.`,
+  );
 }
 
 /**
@@ -170,7 +174,7 @@ export async function deleteOnAccountAction(form: FormData): Promise<void> {
       },
     ],
   });
-  back(form, where(entry.customerId), "Entry deleted, with what had been attributed from it.");
+  back(form, where(entry.customerId), "Deleted, with what had been assigned from it. The history keeps a record.");
 }
 
 /**
@@ -292,8 +296,8 @@ export async function attributeOnAccountAction(form: FormData): Promise<void> {
   back(
     form,
     where(entry.customerId),
-    `${formatMoney(amount, entry.currency)} attributed to ${invoice.invoiceNo ?? "the invoice"}` +
+    `${formatMoney(amount, entry.currency)} assigned to invoice ${invoice.invoiceNo ?? "(no number)"}` +
       (capped ? " — the amount typed was more than was left, so it was cut down to that" : "") +
-      `. ${left > 0 ? `${formatMoney(left, entry.currency)} is still on account.` : "Nothing is left on account from that entry."}`,
+      `. ${left > 0 ? `${formatMoney(left, entry.currency)} is still not yet assigned.` : "All of it is now assigned."}`,
   );
 }

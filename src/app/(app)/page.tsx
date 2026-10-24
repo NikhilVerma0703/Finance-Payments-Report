@@ -2,9 +2,10 @@
  * Dashboard & Master Table.
  *
  * The receivables overview: what needs attention, the KPI cards, the
- * customer-wise summary right below them, what falls due week by week with the
- * ageing and the biggest balances, and every invoice grouped by customer in
- * the full table. Shows every record; a link from the ageing cards or from
+ * customer-wise summary right below them, and what falls due week by week
+ * with the ageing and the biggest balances. The master table is a section of
+ * its own now, right after this one (master/page.tsx), and the header links to
+ * it with the same filters. Shows every record; a link from the ageing cards or from
  * Search Invoices can carry filters here, and then every figure on the page —
  * tiles, ageing, tables and the summary — is worked out from the filtered
  * records alone.
@@ -13,9 +14,8 @@ import Link from "next/link";
 
 import { CustomerSummary, isSummarySort } from "@/components/tracking/CustomerSummary";
 import { AgeingSummary, Dashboard } from "@/components/tracking/Dashboard";
-import { MasterTable } from "@/components/tracking/MasterTable";
 import { AttentionStrip, asAtTime, OverviewHead, type AttentionItem } from "@/components/tracking/Overview";
-import { Banner, Empty } from "@/components/ui";
+import { Banner } from "@/components/ui";
 import { formatMoney } from "@/lib/money";
 import { ageingLabels } from "@/lib/payments/money";
 import { ROUTES } from "@/lib/routes";
@@ -24,8 +24,6 @@ import {
   describeFilters,
   filterInvoices,
   filtersFrom,
-  groupInvoices,
-  isGrouping,
   kpisFrom,
   loadTracking,
   onAccountFor,
@@ -49,8 +47,6 @@ export default async function DashboardPage({
 
   const visible = filterInvoices(invoices, filters);
   const onAccount = onAccountFor(allOnAccount, filters, visible);
-  const grouping = isGrouping(filters.group) ? filters.group : "customer";
-  const groups = groupInvoices(visible, grouping);
   const kpis = kpisFrom(visible, params, onAccount);
   const customers = summarise(visible, onAccount);
   const withoutDueDate = visible.filter((i) => i.schedule.dueDate === null).length;
@@ -75,6 +71,9 @@ export default async function DashboardPage({
         filters={filters}
         actions={
           <>
+            <Link href={`${ROUTES.masterTable}${query ? `?${query}` : ""}`} className="btn-ghost btn-sm">
+              Master Table
+            </Link>
             <Link href={ROUTES.search} className="btn-ghost btn-sm">
               Search invoices
             </Link>
@@ -151,36 +150,11 @@ export default async function DashboardPage({
             </Banner>
           )}
 
-          {/* where the table begins, set apart so nobody scrolls past it */}
-          <div className="mb-5 mt-10 scroll-mt-4 text-center" id="master-table">
-            <div className="flex items-center gap-4">
-              <span className="h-px flex-1 bg-gradient-to-r from-transparent to-[#c9d6e3]" aria-hidden />
-              <h2 className="text-[26px] font-bold tracking-tight text-[var(--color-brand)] sm:text-[30px]">
-                Master Table
-              </h2>
-              <span className="h-px flex-1 bg-gradient-to-l from-transparent to-[#c9d6e3]" aria-hidden />
-            </div>
-            <p className="mt-1.5 text-[12px] text-[var(--color-ink-3)]">
-              {visible.length} invoice(s) · {counts.customers} customer(s) · {counts.receipts}{" "}
-              receipt(s) · {counts.fromExcel} imported, {counts.manual} entered · click a customer&rsquo;s
-              name to adjust its payments
-            </p>
+          <div className="mt-8 text-center">
+            <Link href={`${ROUTES.masterTable}${query ? `?${query}` : ""}`} className="btn">
+              Open the Master Table — every invoice, grouped by customer →
+            </Link>
           </div>
-
-          {groups.length === 0 ? (
-            <section className="card">
-              <Empty>No invoices match these filters.</Empty>
-            </section>
-          ) : (
-            <MasterTable
-              groups={groups}
-              query={query}
-              sort={filters.sort}
-              dir={filters.dir}
-              showHeadings={grouping !== "none"}
-              basePath={ROUTES.dashboard}
-            />
-          )}
         </>
       )}
     </>

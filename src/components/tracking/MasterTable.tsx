@@ -167,9 +167,20 @@ export function MasterTable({
                 <p className="text-[11px] text-[var(--color-ink-3)]">{group.sub}</p>
               </div>
               {group.customerId && (
-                <Link href={ROUTES.customer(group.customerId)} className="btn-ghost btn-sm">
-                  Open customer
-                </Link>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* the customer's invoices and what each is missing, with the
+                      form to fill it in — Upload Sheet's Edit, a size under the name */}
+                  <Link
+                    href={`${ROUTES.customer(group.customerId)}#missing`}
+                    className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-[#b9dfd9] bg-white px-2.5 py-1 text-[13px] font-semibold text-[var(--color-accent)] hover:bg-[#e6f4f2]"
+                    title="Edit / add extra information: every invoice of this customer, what each is missing, and the form to fill it in"
+                  >
+                    <span aria-hidden>✎</span> Edit / Add extra information
+                  </Link>
+                  <Link href={ROUTES.customer(group.customerId)} className="btn-ghost btn-sm">
+                    Open customer
+                  </Link>
+                </div>
               )}
             </div>
           )}
