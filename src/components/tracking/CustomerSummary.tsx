@@ -3,29 +3,44 @@
  * currency underneath. Two currencies are never added together.
  *
  * The table management reads first, so it is laid out to be read left to
- * right: who, how many invoices, what was invoiced, what came in and how much
- * of it, what is still owed and how much of that is late — and one status that
- * says where the customer stands (`customerStanding`). Amounts are in the
- * customer's invoice currency, with its own symbol and grouping.
+ * right: who, how many invoices, what was invoiced, what came in and when it
+ * last did, how much of it, what is still owed and how much of that is late —
+ * and one status that says where the customer stands (`customerStanding`).
+ * Amounts are in the customer's invoice currency, with its own symbol and
+ * grouping.
+ *
+ * Its heading is the page's most prominent after the title, centred between
+ * rules, with the search and the order under it (owner, 24 Oct 2026). The rows
+ * come newest payment first unless another order is picked (?csort=), and a
+ * name typed in the search box filters them as it is typed (CustomerSearch);
+ * Enter sends it as ?cq=, so the S. No. and the totals are over the matches.
+ * Rows are striped and the columns ruled; the Sheet, S. No. and Customer
+ * columns stay put while the rest scrolls sideways, with a second scrollbar
+ * along the top (SideScroll).
  *
  * Money held on account — received or credited but not yet attributed to an
  * invoice — gets its own two columns only when there is some. With `returnTo`,
  * a customer's currency can be set or corrected from the row itself; it is
- * saved on the customer in this module only. With `sort`, the reader can
- * reorder the rows within each currency.
+ * saved on the customer in this module only.
  */
 import Link from "next/link";
 
 import { currencyLabel, currencyOptions } from "@/lib/choices";
 import { STANDING_LABELS, STANDING_TONE } from "@/lib/payments/standing";
 import { ROUTES } from "@/lib/routes";
+import { daysBetween } from "@/lib/text";
 import { saveCustomerAction } from "@/server/payments/actions";
 import type { CustomerSummary as Row } from "@/server/payments/query";
 import { AutoSelect } from "./AutoSelect";
 import { day, money, TONE_CLASS } from "./bits";
+import { CustomerSearch } from "./CustomerSearch";
+import { SideScroll } from "./SideScroll";
 
-/** The orders a reader can put the rows in, within each currency. */
+/** The orders a reader can put the rows in, within each currency. The first
+ *  is the default (owner, 24 Oct 2026: "By default, automatically sort
+ *  customers by latest payment received"). */
 export const SUMMARY_SORTS = {
+  recent: "Latest payment received, newest first",
   outstanding: "Outstanding balance, highest first",
   overdue: "Overdue amount, highest first",
   value: "Invoice value, highest first",
@@ -35,11 +50,15 @@ export const SUMMARY_SORTS = {
 
 export type SummarySort = keyof typeof SUMMARY_SORTS;
 
+export const DEFAULT_SUMMARY_SORT: SummarySort = "recent";
+
 export function isSummarySort(v: unknown): v is SummarySort {
   return typeof v === "string" && v in SUMMARY_SORTS;
 }
 
 const ORDER: Record<SummarySort, (a: Row, b: Row) => number> = {
+  // a customer nothing has come in from goes after every one something has
+  recent: (a, b) => (b.lastReceipt ?? "").localeCompare(a.lastReceipt ?? "") || b.outstanding - a.outstanding,
   outstanding: (a, b) => b.outstanding - a.outstanding,
   overdue: (a, b) => b.overdue - a.overdue || b.outstanding - a.outstanding,
   value: (a, b) => b.invoiceValue - a.invoiceValue,
@@ -47,11 +66,32 @@ const ORDER: Record<SummarySort, (a: Row, b: Row) => number> = {
   name: (a, b) => a.name.localeCompare(b.name),
 };
 
+const TABLE_ID = "customer-summary-table";
+
+// Ruled columns, a stronger rule under the header, room to read. The borders
+// are the cells' own (border-separate), because a collapsed border stays
+// behind when its cell sticks.
+const th =
+  "whitespace-nowrap border-b-2 border-r border-[var(--color-line)] bg-[#f1f5f9] px-3 py-3 align-bottom text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-2)] last:border-r-0";
+const td = "border-b border-r border-[#e8eef4] px-3 py-3 align-top last:border-r-0";
+const foot = "border-b-2 border-r border-[var(--color-line)] bg-[#eef3f8] px-3 py-3 align-top last:border-r-0";
+
+// Sheet, S. No. and Customer stay put while the figures scroll under them:
+// fixed widths, so each knows where the one before ends.
+const PIN = {
+  sheet: "sticky left-0 z-10 w-[76px] min-w-[76px]",
+  serial: "sticky left-[76px] z-10 w-[52px] min-w-[52px]",
+  name: "sticky left-[128px] z-10 min-w-[210px] shadow-[6px_0_6px_-6px_rgba(16,24,40,0.2)]",
+};
+/** A body row's ground, striped: opaque, so nothing shows through a pinned cell. */
+const ground = (stripe: boolean) => `${stripe ? "bg-[#f8fafc]" : "bg-white"} transition-colors group-hover:bg-[#eef6f5]`;
+
 export function CustomerSummary({
   customers,
   returnTo,
   sort,
   today,
+  search = "",
 }: {
   customers: Row[];
   /** Where a currency change from the table comes back to. Omitted, the table is read-only. */
@@ -60,193 +100,258 @@ export function CustomerSummary({
   sort?: { value: SummarySort; keep: Record<string, string> };
   /** The date the figures are as at, for the heading. */
   today?: string;
+  /** The customer-name search sent with the form (?cq=). */
+  search?: string;
 }) {
   if (!customers.length) return null;
 
-  const order = ORDER[sort?.value ?? "outstanding"];
+  const term = search.trim();
+  const matching = term ? customers.filter((c) => c.name.toLowerCase().includes(term.toLowerCase())) : customers;
+  const order = ORDER[sort?.value ?? DEFAULT_SUMMARY_SORT];
   const byCurrency = new Map<string, Row[]>();
-  for (const c of customers) byCurrency.set(c.currency, [...(byCurrency.get(c.currency) ?? []), c]);
+  for (const c of matching) byCurrency.set(c.currency, [...(byCurrency.get(c.currency) ?? []), c]);
   for (const rows of byCurrency.values()) rows.sort(order);
 
-  const anyOnAccount = customers.some((c) => Math.abs(c.onAccount) > 0.004);
+  const anyOnAccount = matching.some((c) => Math.abs(c.onAccount) > 0.004);
   const several = byCurrency.size > 1;
   const people = new Set(customers.map((c) => c.id ?? "~none")).size;
-  const columns = 11 + (anyOnAccount ? 2 : 0);
+  const columns = 12 + (anyOnAccount ? 2 : 0);
+  // the summary without its search, the filters and the order kept
+  const kept = sort ? new URLSearchParams({ ...sort.keep, ...(sort.value !== DEFAULT_SUMMARY_SORT ? { csort: sort.value } : {}) }).toString() : "";
+  const clearHref = sort ? `${ROUTES.dashboard}${kept ? `?${kept}` : ""}#customers` : null;
   let serial = 0;
 
-  const th = "px-3 py-2.5 align-bottom font-semibold";
-  const td = "px-3 py-3 align-top";
-
   return (
-    <section
-      className="mt-6 scroll-mt-4 overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white"
-      id="customers"
-    >
+    <section className="mt-6 scroll-mt-4 overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white" id="customers">
       {/* ---------------------------------------------------------- heading */}
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--color-line)] px-5 py-4">
-        <div>
-          <h2 className="text-[16px] font-semibold tracking-tight text-[var(--color-ink)]">
-            Customer-wise summary
-          </h2>
-          <p className="mt-0.5 text-[12px] text-[var(--color-ink-3)]">
-            {people} customer(s)
-            {several && ` · ${byCurrency.size} currencies, totalled separately`} · amounts in each
-            customer&rsquo;s invoice currency{today && ` · as at ${day(today)}`}
-          </p>
+      {/* the heading management looks for first (owner, 24 Oct 2026: "larger,
+          bold, highlighted with a more prominent color, and center-aligned") */}
+      <header className="border-b border-[var(--color-line)] bg-gradient-to-b from-[#e8f1f9] to-white px-5 pb-4 pt-6 text-center">
+        <div className="flex items-center gap-4">
+          <span className="h-px flex-1 bg-gradient-to-r from-transparent to-[#9db7d1]" aria-hidden />
+          <h2 className="text-[26px] font-bold tracking-tight text-[var(--color-brand)] sm:text-[28px]">Customer-wise Summary</h2>
+          <span className="h-px flex-1 bg-gradient-to-l from-transparent to-[#9db7d1]" aria-hidden />
         </div>
-        <div className="flex flex-wrap items-center gap-4 text-[12px]">
-          {sort && (
-            <form action={`${ROUTES.dashboard}#customers`} className="flex items-center gap-2">
-              {Object.entries(sort.keep).map(([k, v]) => (
-                <input key={k} type="hidden" name={k} value={v} />
-              ))}
-              <span className="text-[var(--color-ink-3)]">Sort by</span>
-              <AutoSelect
-                name="csort"
-                value={sort.value}
-                options={Object.entries(SUMMARY_SORTS)}
-                label="Sort the customer-wise summary"
-                className="py-1"
-              />
-            </form>
-          )}
-          {returnTo && (
-            <span className="text-[11px] text-[var(--color-ink-3)]">
-              Pick a currency in its column to set or correct a customer&rsquo;s default.
+        <p className="mt-1.5 text-[12px] text-[var(--color-ink-3)]">
+          {people} customer(s)
+          {several && ` · ${byCurrency.size} currencies, totalled separately`} · amounts in each
+          customer&rsquo;s invoice currency{today && ` · as at ${day(today)}`}
+        </p>
+
+        {sort && (
+          <form action={`${ROUTES.dashboard}#customers`} className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[12px]">
+            {Object.entries(sort.keep).map(([k, v]) => (
+              <input key={k} type="hidden" name={k} value={v} />
+            ))}
+            <CustomerSearch tableId={TABLE_ID} initial={term} total={customers.length} />
+            <span className="flex items-center gap-2">
+              <span className="font-semibold uppercase tracking-[0.06em] text-[var(--color-ink-3)]">Sort by</span>
+              <AutoSelect name="csort" value={sort.value} options={Object.entries(SUMMARY_SORTS)} label="Sort the customer-wise summary" className="py-1.5 text-[13px]" />
             </span>
-          )}
-        </div>
+            {term && clearHref && (
+              <Link href={clearHref} className="btn-ghost btn-sm">
+                Clear search
+              </Link>
+            )}
+          </form>
+        )}
+        {returnTo && (
+          <p className="mt-2 text-[11px] text-[var(--color-ink-3)]">Pick a currency in its column to set or correct a customer&rsquo;s default.</p>
+        )}
       </header>
 
       {/* ---------------------------------------------------------- table */}
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[1080px] border-collapse text-[12.5px]">
-          <thead>
-            <tr className="border-b border-[var(--color-line)] bg-[#f4f7fa] text-[10.5px] uppercase tracking-[0.06em] text-[var(--color-ink-2)]">
-              <th className={`${th} w-16 whitespace-nowrap text-center`} title="The customer's outstanding sheet, as a PDF">
-                Sheet
-              </th>
-              <th className={`${th} w-14 whitespace-nowrap text-center`}>S. No.</th>
-              <th className={`${th} text-left`}>Customer</th>
-              <th className={`${th} text-left`}>Currency</th>
-              <th className={`${th} text-right`}>Total invoices</th>
-              <th className={`${th} text-right`}>Invoice value</th>
-              <th className={`${th} text-right`}>Total received</th>
-              <th className={`${th} text-left`}>Collected</th>
-              <th className={`${th} text-right`}>Outstanding balance</th>
-              <th className={`${th} text-right`} title="The part of the balance whose due date has passed">
-                Overdue amount
-              </th>
-              {anyOnAccount && (
-                <>
-                  <th
-                    className={`${th} text-right`}
-                    title="Received or credited, not yet attributed to an invoice"
-                  >
-                    On account
-                  </th>
-                  <th className={`${th} text-right`} title="Outstanding balance less what is on account">
-                    Net outstanding
-                  </th>
-                </>
-              )}
-              <th className={`${th} text-left`}>Payment status</th>
-            </tr>
-          </thead>
+      {!matching.length ? (
+        <p className="px-5 py-8 text-center text-[13px] text-[var(--color-ink-2)]">
+          No customer&rsquo;s name holds &ldquo;{term}&rdquo;.{" "}
+          {clearHref && (
+            <Link href={clearHref} className="link">
+              Show every customer
+            </Link>
+          )}
+        </p>
+      ) : (
+        <SideScroll label="Customer-wise summary — scrolls sideways">
+          <table id={TABLE_ID} className="w-full min-w-[1180px] border-separate border-spacing-0 text-[12.5px]">
+            <thead>
+              <tr>
+                <th className={`${th} ${PIN.sheet} text-center`} title="The customer's outstanding sheet, as a PDF">
+                  Sheet
+                </th>
+                <th className={`${th} ${PIN.serial} text-center`}>S. No.</th>
+                <th className={`${th} ${PIN.name} text-left`}>Customer</th>
+                <th className={`${th} text-left`}>Currency</th>
+                <th className={`${th} text-right`}>Total invoices</th>
+                <th className={`${th} text-right`}>Invoice value</th>
+                <th className={`${th} text-right`}>Total received</th>
+                <th className={`${th} text-left`} title="The latest date a payment came in from the customer — the default order, newest first">
+                  Last payment
+                </th>
+                <th className={`${th} text-left`}>Collected</th>
+                <th className={`${th} text-right`}>Outstanding balance</th>
+                <th className={`${th} text-right`} title="The part of the balance whose due date has passed">
+                  Overdue amount
+                </th>
+                {anyOnAccount && (
+                  <>
+                    <th className={`${th} text-right`} title="Received or credited, not yet attributed to an invoice">
+                      On account
+                    </th>
+                    <th className={`${th} text-right`} title="Outstanding balance less what is on account">
+                      Net outstanding
+                    </th>
+                  </>
+                )}
+                <th className={`${th} text-left`}>Payment status</th>
+              </tr>
+            </thead>
 
-          <tbody>
-            {[...byCurrency.entries()].map(([currency, rows]) => {
-              const cur = currency === "—" ? null : currency;
-              const t = rows.reduce(
-                (s, c) => ({
-                  invoices: s.invoices + c.invoices,
-                  open: s.open + c.openInvoices,
-                  invoiced: s.invoiced + c.invoiceValue,
-                  received: s.received + c.received,
-                  outstanding: s.outstanding + c.outstanding,
-                  onAccount: s.onAccount + c.onAccount,
-                  net: s.net + c.netOutstanding,
-                  overdue: s.overdue + c.overdue,
-                  overdueInvoices: s.overdueInvoices + c.overdueInvoices,
-                }),
-                { invoices: 0, open: 0, invoiced: 0, received: 0, outstanding: 0, onAccount: 0, net: 0, overdue: 0, overdueInvoices: 0 },
-              );
-              const pct = t.invoiced > 0 ? Math.round((t.received / t.invoiced) * 1000) / 10 : 0;
+            <tbody>
+              {/* real currencies first; no currency recorded last */}
+              {[...byCurrency.entries()]
+                .sort(([a], [b]) => Number(a === "—") - Number(b === "—"))
+                .map(([currency, rows]) => {
+                  const cur = currency === "—" ? null : currency;
+                  const t = rows.reduce(
+                    (s, c) => ({
+                      invoices: s.invoices + c.invoices,
+                      open: s.open + c.openInvoices,
+                      invoiced: s.invoiced + c.invoiceValue,
+                      received: s.received + c.received,
+                      outstanding: s.outstanding + c.outstanding,
+                      onAccount: s.onAccount + c.onAccount,
+                      net: s.net + c.netOutstanding,
+                      overdue: s.overdue + c.overdue,
+                      overdueInvoices: s.overdueInvoices + c.overdueInvoices,
+                      last: c.lastReceipt && (!s.last || c.lastReceipt > s.last) ? c.lastReceipt : s.last,
+                    }),
+                    { invoices: 0, open: 0, invoiced: 0, received: 0, outstanding: 0, onAccount: 0, net: 0, overdue: 0, overdueInvoices: 0, last: null as string | null },
+                  );
+                  const pct = t.invoiced > 0 ? Math.round((t.received / t.invoiced) * 1000) / 10 : 0;
 
-              return [
-                several && (
-                  <tr key={`head-${currency}`} className="border-b border-[var(--color-line)] bg-[#fbfcfd]">
-                    <td colSpan={columns} className="px-3 py-2">
-                      <CurrencyBadge code={cur} />
-                      <span className="ml-2 text-[12px] font-semibold text-[var(--color-ink-2)]">
-                        {cur ? currencyLabel(cur).replace(/^[A-Z]{3} — /, "") : "No currency recorded"}
-                      </span>
-                      <span className="ml-2 text-[11px] text-[var(--color-ink-3)]">{rows.length} customer(s)</span>
-                    </td>
-                  </tr>
-                ),
+                  return [
+                    several && (
+                      <tr key={`head-${currency}`} data-group={currency}>
+                        <td colSpan={columns} className="border-b border-[var(--color-line)] bg-[#f6f9fc] p-0">
+                          {/* the label keeps to the left edge however far the row is scrolled */}
+                          <div className="sticky left-0 flex w-max items-center gap-2 px-3 py-2">
+                            <CurrencyBadge code={cur} />
+                            <span className="text-[12px] font-semibold text-[var(--color-ink-2)]">
+                              {cur ? currencyLabel(cur).replace(/^[A-Z]{3} — /, "") : "No currency recorded"}
+                            </span>
+                            <span className="text-[11px] text-[var(--color-ink-3)]">{rows.length} customer(s)</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ),
 
-                ...rows.map((c) => {
-                  serial += 1;
-                  return (
-                    <tr
-                      key={`${c.id ?? "none"}-${c.currency}`}
-                      className="border-b border-[var(--color-line)] transition-colors hover:bg-[#f8fbfd]"
-                    >
-                      <td className={`${td} text-center`}>
-                        {c.id && c.invoices > 0 && (
-                          <a
-                            href={`${ROUTES.customerSheet}?${new URLSearchParams({ customer: c.id, currency: c.currency }).toString()}`}
-                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-[#b9dfd9] bg-white px-2 py-1 text-[11px] font-semibold text-[var(--color-accent)] hover:bg-[#e6f4f2]"
-                            title={`Download ${c.name}'s outstanding sheet (${c.currency}) as a PDF`}
-                          >
-                            ↓ PDF
-                          </a>
-                        )}
-                      </td>
-                      <td className={`${td} text-center tabular-nums text-[var(--color-ink-3)]`}>{serial}</td>
-                      <td className={`${td} min-w-[220px]`}>
-                        {c.id ? (
-                          <Link
-                            href={ROUTES.customer(c.id)}
-                            className="text-[13px] font-semibold text-[var(--color-ink)] hover:text-[var(--color-brand-2)] hover:underline"
-                          >
-                            {c.name}
-                          </Link>
-                        ) : (
-                          <span className="text-[13px] italic text-[var(--color-ink-3)]">{c.name}</span>
-                        )}
-                      </td>
-                      <td className={`${td} whitespace-nowrap`}>
-                        <CurrencyCell row={c} returnTo={returnTo} />
-                      </td>
-                      <td className={`${td} text-right`}>
-                        <div className="tabular-nums font-medium">{c.invoices}</div>
-                        {c.invoices > 0 && (
-                          <div className="text-[10.5px] text-[var(--color-ink-3)]">{c.openInvoices} open</div>
-                        )}
-                      </td>
-                      <td className={`${td} whitespace-nowrap text-right tabular-nums`}>{money(c.invoiceValue, cur)}</td>
-                      <td
-                        className={`${td} whitespace-nowrap text-right tabular-nums ${c.received <= 0.01 ? "text-[var(--color-ink-3)]" : ""}`}
-                      >
-                        {money(c.received, cur)}
-                      </td>
-                      <td className={td}>{c.invoices > 0 ? <Collected pct={c.collectedPct} /> : <Dash />}</td>
-                      <td className={`${td} whitespace-nowrap text-right font-semibold tabular-nums`}>
-                        {money(c.outstanding, cur)}
-                      </td>
-                      <td className={`${td} whitespace-nowrap text-right`}>
-                        {c.overdue > 0.01 ? (
-                          <>
-                            <div className="font-semibold tabular-nums text-[var(--color-bad-fg)]">
-                              {money(c.overdue, cur)}
-                            </div>
-                            {c.oldestDue && (
-                              <div className="text-[10.5px] text-[var(--color-ink-3)]">
-                                oldest due {day(c.oldestDue)}
-                              </div>
+                    ...rows.map((c, i) => {
+                      serial += 1;
+                      const cell = `${td} ${ground(i % 2 === 1)}`;
+                      return (
+                        <tr key={`${c.id ?? "none"}-${c.currency}`} className="group" data-name={c.name.toLowerCase()} data-cur={currency}>
+                          <td className={`${cell} ${PIN.sheet} text-center`}>
+                            {c.id && c.invoices > 0 && (
+                              <a
+                                href={`${ROUTES.customerSheet}?${new URLSearchParams({ customer: c.id, currency: c.currency }).toString()}`}
+                                className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-[#b9dfd9] bg-white px-2 py-1 text-[11px] font-semibold text-[var(--color-accent)] hover:bg-[#e6f4f2]"
+                                title={`Download ${c.name}'s outstanding sheet (${c.currency}) as a PDF`}
+                              >
+                                ↓ PDF
+                              </a>
                             )}
+                          </td>
+                          <td className={`${cell} ${PIN.serial} text-center tabular-nums text-[var(--color-ink-3)]`}>{serial}</td>
+                          <td className={`${cell} ${PIN.name}`}>
+                            {c.id ? (
+                              <Link href={ROUTES.customer(c.id)} className="text-[13px] font-semibold text-[var(--color-ink)] hover:text-[var(--color-brand-2)] hover:underline">
+                                {c.name}
+                              </Link>
+                            ) : (
+                              <span className="text-[13px] italic text-[var(--color-ink-3)]">{c.name}</span>
+                            )}
+                          </td>
+                          <td className={`${cell} whitespace-nowrap`}>
+                            <CurrencyCell row={c} returnTo={returnTo} />
+                          </td>
+                          <td className={`${cell} text-right`}>
+                            <div className="tabular-nums font-medium">{c.invoices}</div>
+                            {c.invoices > 0 && <div className="text-[10.5px] text-[var(--color-ink-3)]">{c.openInvoices} open</div>}
+                          </td>
+                          <td className={`${cell} whitespace-nowrap text-right tabular-nums`}>{money(c.invoiceValue, cur)}</td>
+                          <td className={`${cell} whitespace-nowrap text-right tabular-nums ${c.received <= 0.01 ? "text-[var(--color-ink-3)]" : ""}`}>
+                            {money(c.received, cur)}
+                          </td>
+                          <td className={`${cell} whitespace-nowrap`}>
+                            {c.lastReceipt ? (
+                              <>
+                                <div className="tabular-nums text-[var(--color-ink)]">{day(c.lastReceipt)}</div>
+                                {today && <div className="text-[10.5px] text-[var(--color-ink-3)]">{ago(daysBetween(c.lastReceipt, today))}</div>}
+                              </>
+                            ) : (
+                              <span className="text-[10.5px] text-[var(--color-ink-3)]">no dated payment</span>
+                            )}
+                          </td>
+                          <td className={cell}>{c.invoices > 0 ? <Collected pct={c.collectedPct} /> : <Dash />}</td>
+                          <td className={`${cell} whitespace-nowrap text-right font-semibold tabular-nums`}>{money(c.outstanding, cur)}</td>
+                          <td className={`${cell} whitespace-nowrap text-right`}>
+                            {c.overdue > 0.01 ? (
+                              <>
+                                <div className="font-semibold tabular-nums text-[var(--color-bad-fg)]">{money(c.overdue, cur)}</div>
+                                {c.oldestDue && <div className="text-[10.5px] text-[var(--color-ink-3)]">oldest due {day(c.oldestDue)}</div>}
+                              </>
+                            ) : (
+                              <Dash />
+                            )}
+                          </td>
+                          {anyOnAccount && (
+                            <>
+                              <td className={`${cell} whitespace-nowrap text-right tabular-nums`}>
+                                {Math.abs(c.onAccount) > 0.004 && c.id ? (
+                                  <Link href={`${ROUTES.customer(c.id)}#on-account`} className="font-medium text-[var(--color-accent)] hover:underline">
+                                    {money(c.onAccount, cur)}
+                                  </Link>
+                                ) : (
+                                  <Dash />
+                                )}
+                              </td>
+                              <td className={`${cell} whitespace-nowrap text-right font-semibold tabular-nums`}>{money(c.netOutstanding, cur)}</td>
+                            </>
+                          )}
+                          <td className={`${cell} min-w-[170px]`}>
+                            <span className={`chip ${TONE_CLASS[STANDING_TONE[c.paymentStatus]]}`}>{STANDING_LABELS[c.paymentStatus]}</span>
+                            <StatusNote row={c} />
+                          </td>
+                        </tr>
+                      );
+                    }),
+
+                    <tr key={`total-${currency}`} className="font-semibold" data-total={currency}>
+                      <td className={`${foot} ${PIN.sheet}`} />
+                      <td className={`${foot} ${PIN.serial}`} />
+                      <td className={`${foot} ${PIN.name}`}>
+                        {cur ? `Total ${currency}` : "Total — no currency"}
+                        <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">{rows.length} customer(s)</div>
+                      </td>
+                      <td className={foot}>
+                        <CurrencyBadge code={cur} />
+                      </td>
+                      <td className={`${foot} text-right`}>
+                        <div className="tabular-nums">{t.invoices}</div>
+                        <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">{t.open} open</div>
+                      </td>
+                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{money(t.invoiced, cur)}</td>
+                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{money(t.received, cur)}</td>
+                      <td className={`${foot} whitespace-nowrap text-[10.5px] font-normal text-[var(--color-ink-3)]`}>{t.last ? `latest ${day(t.last)}` : ""}</td>
+                      <td className={foot}>
+                        <Collected pct={pct} />
+                      </td>
+                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{money(t.outstanding, cur)}</td>
+                      <td className={`${foot} whitespace-nowrap text-right`}>
+                        {t.overdue > 0.01 ? (
+                          <>
+                            <div className="tabular-nums text-[var(--color-bad-fg)]">{money(t.overdue, cur)}</div>
+                            <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">{t.overdueInvoices} invoice(s)</div>
                           </>
                         ) : (
                           <Dash />
@@ -254,97 +359,40 @@ export function CustomerSummary({
                       </td>
                       {anyOnAccount && (
                         <>
-                          <td className={`${td} whitespace-nowrap text-right tabular-nums`}>
-                            {Math.abs(c.onAccount) > 0.004 && c.id ? (
-                              <Link
-                                href={`${ROUTES.customer(c.id)}#on-account`}
-                                className="font-medium text-[var(--color-accent)] hover:underline"
-                              >
-                                {money(c.onAccount, cur)}
-                              </Link>
-                            ) : (
-                              <Dash />
-                            )}
+                          <td className={`${foot} whitespace-nowrap text-right tabular-nums text-[var(--color-accent)]`}>
+                            {Math.abs(t.onAccount) > 0.004 ? money(t.onAccount, cur) : <Dash />}
                           </td>
-                          <td className={`${td} whitespace-nowrap text-right font-semibold tabular-nums`}>
-                            {money(c.netOutstanding, cur)}
-                          </td>
+                          <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{money(t.net, cur)}</td>
                         </>
                       )}
-                      <td className={`${td} min-w-[180px]`}>
-                        <span className={`chip ${TONE_CLASS[STANDING_TONE[c.paymentStatus]]}`}>
-                          {STANDING_LABELS[c.paymentStatus]}
-                        </span>
-                        <StatusNote row={c} />
-                      </td>
-                    </tr>
-                  );
-                }),
-
-                <tr
-                  key={`total-${currency}`}
-                  className="border-b-2 border-[var(--color-line)] bg-[#f4f7fa] font-semibold"
-                >
-                  <td className={td} />
-                  <td className={td} />
-                  <td className={td}>
-                    {cur ? `Total ${currency}` : "Total — no currency"}
-                    <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">{rows.length} customer(s)</div>
-                  </td>
-                  <td className={td}>
-                    <CurrencyBadge code={cur} />
-                  </td>
-                  <td className={`${td} text-right`}>
-                    <div className="tabular-nums">{t.invoices}</div>
-                    <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">{t.open} open</div>
-                  </td>
-                  <td className={`${td} whitespace-nowrap text-right tabular-nums`}>{money(t.invoiced, cur)}</td>
-                  <td className={`${td} whitespace-nowrap text-right tabular-nums`}>{money(t.received, cur)}</td>
-                  <td className={td}>
-                    <Collected pct={pct} />
-                  </td>
-                  <td className={`${td} whitespace-nowrap text-right tabular-nums`}>{money(t.outstanding, cur)}</td>
-                  <td className={`${td} whitespace-nowrap text-right`}>
-                    {t.overdue > 0.01 ? (
-                      <>
-                        <div className="tabular-nums text-[var(--color-bad-fg)]">{money(t.overdue, cur)}</div>
-                        <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">
-                          {t.overdueInvoices} invoice(s)
-                        </div>
-                      </>
-                    ) : (
-                      <Dash />
-                    )}
-                  </td>
-                  {anyOnAccount && (
-                    <>
-                      <td className={`${td} whitespace-nowrap text-right tabular-nums text-[var(--color-accent)]`}>
-                        {Math.abs(t.onAccount) > 0.004 ? money(t.onAccount, cur) : <Dash />}
-                      </td>
-                      <td className={`${td} whitespace-nowrap text-right tabular-nums`}>{money(t.net, cur)}</td>
-                    </>
-                  )}
-                  <td className={td} />
-                </tr>,
-              ];
-            })}
-          </tbody>
-        </table>
-      </div>
+                      <td className={foot} />
+                    </tr>,
+                  ];
+                })}
+            </tbody>
+          </table>
+        </SideScroll>
+      )}
 
       <footer className="flex flex-wrap gap-x-5 gap-y-1 border-t border-[var(--color-line)] px-5 py-3 text-[11px] text-[var(--color-ink-3)]">
         <span>Totals are per currency — amounts in different currencies are never added together.</span>
         <span>
-          <strong className="font-semibold text-[var(--color-ink-2)]">Overdue amount</strong> is only the part of a
-          balance whose due date has passed.
+          <strong className="font-semibold text-[var(--color-ink-2)]">Last payment</strong> is the latest receipt from
+          the customer, on any of its invoices or on account.
         </span>
         <span>
-          <strong className="font-semibold text-[var(--color-ink-2)]">Due date unknown</strong>: an open invoice has
-          no due date to judge it by.
+          <strong className="font-semibold text-[var(--color-ink-2)]">Overdue amount</strong> is only the part of a
+          balance whose due date has passed.
         </span>
       </footer>
     </section>
   );
+}
+
+/** "today", "3 days ago". */
+function ago(days: number): string {
+  if (days <= 0) return "today";
+  return days === 1 ? "yesterday" : `${days} days ago`;
 }
 
 function Dash() {

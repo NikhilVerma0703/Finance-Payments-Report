@@ -20,7 +20,7 @@
  */
 import Link from "next/link";
 
-import { CustomerSummary, isSummarySort } from "@/components/tracking/CustomerSummary";
+import { CustomerSummary, DEFAULT_SUMMARY_SORT, isSummarySort } from "@/components/tracking/CustomerSummary";
 import { AgeingSummary, Dashboard } from "@/components/tracking/Dashboard";
 import { AttentionStrip, asAtTime, OverviewHead, type AttentionItem } from "@/components/tracking/Overview";
 import { AllInvoices, PendingSwitch } from "@/components/tracking/PendingView";
@@ -54,7 +54,9 @@ export default async function DashboardPage({
   const sp = await searchParams;
   const filters = filtersFrom(sp);
   // the customer-wise summary's own order, kept apart from the filters
-  const csort = isSummarySort(sp.csort) ? sp.csort : "outstanding";
+  // newest payment first unless another order is picked (owner, 24 Oct 2026)
+  const csort = isSummarySort(sp.csort) ? sp.csort : DEFAULT_SUMMARY_SORT;
+  const cq = typeof sp.cq === "string" ? sp.cq : "";
   const { invoices, onAccount: allOnAccount, params, today, counts, options } = await loadTracking();
 
   const showAll = showsAll(sp.show);
@@ -65,7 +67,8 @@ export default async function DashboardPage({
   // money on account belongs to its customer whether or not anything is pending
   const onAccount = onAccountFor(allOnAccount, filters, inView);
   const kpis = kpisFrom(visible, params, onAccount);
-  const customers = summarise(visible, onAccount);
+  // each customer's latest payment comes from every invoice in view
+  const customers = summarise(visible, onAccount, inView);
   const withoutDueDate = visible.filter((i) => i.schedule.dueDate === null).length;
   const defaulted = visible.filter((i) => i.schedule.dueDateSource === "default" && isPending(i)).length;
 
@@ -163,9 +166,13 @@ export default async function DashboardPage({
             today={today}
             sort={{
               value: csort,
-              keep: Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) as Record<string, string>,
+              keep: {
+                ...(Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) as Record<string, string>),
+                ...(showAll ? { show: "all" } : {}),
+              },
             }}
-            returnTo={`${ROUTES.dashboard}?${toQuery(filters, csort !== "outstanding" ? { csort } : {})}#customers`}
+            search={cq}
+            returnTo={`${ROUTES.dashboard}?${toQuery(filters, { ...(csort !== DEFAULT_SUMMARY_SORT ? { csort } : {}), ...(cq ? { cq } : {}), ...(showAll ? { show: "all" } : {}) })}#customers`}
           />
 
           <AgeingSummary

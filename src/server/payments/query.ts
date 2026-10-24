@@ -70,6 +70,10 @@ export interface CustomerSummary {
   onAccount: number;
   /** Outstanding less what is on account — what the customer actually owes. */
   netOutstanding: number;
+  /** The latest date a payment came in from this customer in this currency —
+   *  on any of its invoices, cleared ones too, or booked on account. The
+   *  summary's default order, newest first (owner, 24 Oct 2026). */
+  lastReceipt: string | null;
 }
 
 export interface TrackingKpis {
@@ -374,6 +378,9 @@ function unique(values: string[]): string[] {
 export function summarise(
   invoices: TrackedInvoice[],
   onAccount: OnAccountEntry[] = [],
+  /** Every invoice in view, cleared ones too, for each row's latest payment —
+   *  the rows may be over the pending invoices alone. Defaults to `invoices`. */
+  receiptsFrom?: TrackedInvoice[],
 ): CustomerSummary[] {
   const groups = new Map<string, CustomerSummary>();
   const blank = (id: string | null, name: string, currency: string): CustomerSummary => ({
@@ -397,7 +404,11 @@ export function summarise(
     statuses: {} as Partial<Record<TrackingStatus, number>>,
     onAccount: 0,
     netOutstanding: 0,
+    lastReceipt: null,
   });
+  const later = (g: CustomerSummary, date: string | null) => {
+    if (date && (!g.lastReceipt || date > g.lastReceipt)) g.lastReceipt = date;
+  };
 
   for (const i of invoices) {
     const name = i.customerName ?? "No customer recorded";
@@ -438,7 +449,14 @@ export function summarise(
     const k = `${e.customerId}::${currency}`;
     const g = groups.get(k) ?? blank(e.customerId, e.customerName ?? "(unnamed)", currency);
     g.onAccount = round2(g.onAccount + e.credit);
+    if (e.kind === "RECEIPT") later(g, e.entryDate);
     groups.set(k, g);
+  }
+
+  // each row's latest payment, from every invoice in view
+  for (const i of receiptsFrom ?? invoices) {
+    const g = groups.get(`${i.customerId ?? "~none"}::${i.currency ?? "—"}`);
+    if (g) later(g, i.lastReceiptDate);
   }
 
   for (const g of groups.values()) {
