@@ -24,6 +24,7 @@ import { CustomerSummary, DEFAULT_SUMMARY_SORT, isSummarySort } from "@/componen
 import { AgeingSummary, Dashboard } from "@/components/tracking/Dashboard";
 import { AttentionStrip, asAtTime, OverviewHead, type AttentionItem } from "@/components/tracking/Overview";
 import { AllInvoices, PendingSwitch } from "@/components/tracking/PendingView";
+import { fillCurrenciesAction } from "@/server/payments/currencyActions";
 import { Banner } from "@/components/ui";
 import { formatMoney } from "@/lib/money";
 import { ageingLabels } from "@/lib/payments/money";
@@ -70,6 +71,10 @@ export default async function DashboardPage({
   // each customer's latest payment comes from every invoice in view
   const customers = summarise(visible, onAccount, inView);
   const withoutDueDate = visible.filter((i) => i.schedule.dueDate === null).length;
+  // invoices from a sheet with no currency of their own (a customer or client-list
+  // default may stand in until then): their kept file can say
+  const noCurrency = invoices.filter((i) => i.currencySource !== "invoice" && i.sourceFile).length;
+  const currencyNote = typeof sp.currencies === "string" ? sp.currencies : null;
   const defaulted = visible.filter((i) => i.schedule.dueDateSource === "default" && isPending(i)).length;
 
   const query = toQuery(filters);
@@ -159,6 +164,35 @@ export default async function DashboardPage({
             })}
           />
 
+          {/* the currency is read from the uploaded sheets (owner, 25 Oct 2026);
+              sheets uploaded before the reader looked past the invoice-value
+              column are read again from the files kept with them */}
+          {(noCurrency > 0 || currencyNote) && (
+            <div id="currencies" className="mb-4 scroll-mt-4">
+              {currencyNote && (
+                <div className="mb-2">
+                  <Banner tone="ok">{currencyNote}</Banner>
+                </div>
+              )}
+              {noCurrency > 0 && (
+                <Banner tone="warn">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <span>
+                      <strong>{noCurrency}</strong> invoice(s) from uploaded sheets have no currency of their own. The sheets are kept, and
+                      their amounts are formatted in a currency — read it from them; nothing that has a currency already is
+                      changed.
+                    </span>
+                    <form action={fillCurrenciesAction} className="ml-auto">
+                      <button type="submit" className="btn btn-sm">
+                        Read currencies from the uploaded sheets
+                      </button>
+                    </form>
+                  </div>
+                </Banner>
+              )}
+            </div>
+          )}
+
           <Dashboard kpis={kpis} today={today} invoices={visible} receiptsFrom={inView} onAccount={onAccount} filters={filters} />
 
           <CustomerSummary
@@ -172,7 +206,6 @@ export default async function DashboardPage({
               },
             }}
             search={cq}
-            returnTo={`${ROUTES.dashboard}?${toQuery(filters, { ...(csort !== DEFAULT_SUMMARY_SORT ? { csort } : {}), ...(cq ? { cq } : {}), ...(showAll ? { show: "all" } : {}) })}#customers`}
           />
 
           <AgeingSummary
@@ -326,8 +359,8 @@ function attentionItems(args: {
     tone: "warn",
     count: noCurrency.size,
     text: "customer(s) with no currency",
-    sub: "set it in the Customer-wise summary, or load the ERP client list in Settings",
-    href: `${ROUTES.dashboard}#customers`,
+    sub: "read it from their uploaded sheets, or set it on the customer's page",
+    href: `${ROUTES.dashboard}#currencies`,
   });
 
   return items;

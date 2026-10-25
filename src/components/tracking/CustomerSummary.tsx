@@ -18,21 +18,26 @@
  * columns stay put while the rest scrolls sideways, with a second scrollbar
  * along the top (SideScroll).
  *
+ * Every amount carries its currency's code in front of it — USD 174,109.43,
+ * INR 1,23,456.00 — and there is no Currency column (owner, 25 Oct 2026). The
+ * code is the invoices' own, read from the uploaded sheets (sheetReader.ts
+ * findCurrency; server/payments/currencies.ts reads older uploads again), then
+ * the customer's default, then the ERP client list (query.ts). A row whose
+ * currency nothing states says so under the customer's name.
+ *
  * Money held on account — received or credited but not yet attributed to an
- * invoice — gets its own two columns only when there is some. With `returnTo`,
- * a customer's currency can be set or corrected from the row itself; it is
- * saved on the customer in this module only.
+ * invoice — gets its own two columns only when there is some.
  */
 import Link from "next/link";
 
-import { currencyLabel, currencyOptions } from "@/lib/choices";
+import { currencyLabel } from "@/lib/choices";
 import { STANDING_LABELS, STANDING_TONE } from "@/lib/payments/standing";
 import { ROUTES } from "@/lib/routes";
 import { daysBetween } from "@/lib/text";
-import { saveCustomerAction } from "@/server/payments/actions";
 import type { CustomerSummary as Row } from "@/server/payments/query";
 import { AutoSelect } from "./AutoSelect";
-import { day, money, TONE_CLASS } from "./bits";
+import { formatMoney } from "@/lib/money";
+import { day, TONE_CLASS } from "./bits";
 import { CustomerSearch } from "./CustomerSearch";
 import { SideScroll } from "./SideScroll";
 
@@ -88,14 +93,11 @@ const ground = (stripe: boolean) => `${stripe ? "bg-[#f8fafc]" : "bg-white"} tra
 
 export function CustomerSummary({
   customers,
-  returnTo,
   sort,
   today,
   search = "",
 }: {
   customers: Row[];
-  /** Where a currency change from the table comes back to. Omitted, the table is read-only. */
-  returnTo?: string;
   /** The order in force and the query to keep when it changes. Omitted, no sort control. */
   sort?: { value: SummarySort; keep: Record<string, string> };
   /** The date the figures are as at, for the heading. */
@@ -115,7 +117,7 @@ export function CustomerSummary({
   const anyOnAccount = matching.some((c) => Math.abs(c.onAccount) > 0.004);
   const several = byCurrency.size > 1;
   const people = new Set(customers.map((c) => c.id ?? "~none")).size;
-  const columns = 12 + (anyOnAccount ? 2 : 0);
+  const columns = 11 + (anyOnAccount ? 2 : 0);
   // the summary without its search, the filters and the order kept
   const kept = sort ? new URLSearchParams({ ...sort.keep, ...(sort.value !== DEFAULT_SUMMARY_SORT ? { csort: sort.value } : {}) }).toString() : "";
   const clearHref = sort ? `${ROUTES.dashboard}${kept ? `?${kept}` : ""}#customers` : null;
@@ -155,9 +157,6 @@ export function CustomerSummary({
             )}
           </form>
         )}
-        {returnTo && (
-          <p className="mt-2 text-[11px] text-[var(--color-ink-3)]">Pick a currency in its column to set or correct a customer&rsquo;s default.</p>
-        )}
       </header>
 
       {/* ---------------------------------------------------------- table */}
@@ -180,7 +179,6 @@ export function CustomerSummary({
                 </th>
                 <th className={`${th} ${PIN.serial} text-center`}>S. No.</th>
                 <th className={`${th} ${PIN.name} text-left`}>Customer</th>
-                <th className={`${th} text-left`}>Currency</th>
                 <th className={`${th} text-right`}>Total invoices</th>
                 <th className={`${th} text-right`}>Invoice value</th>
                 <th className={`${th} text-right`}>Total received</th>
@@ -270,17 +268,22 @@ export function CustomerSummary({
                             ) : (
                               <span className="text-[13px] italic text-[var(--color-ink-3)]">{c.name}</span>
                             )}
-                          </td>
-                          <td className={`${cell} whitespace-nowrap`}>
-                            <CurrencyCell row={c} returnTo={returnTo} />
+                            {!cur && (
+                              <div
+                                className="mt-0.5 text-[10.5px] font-medium text-[var(--color-warn-fg)]"
+                                title="No uploaded sheet, invoice, customer record or ERP client states a currency for this customer"
+                              >
+                                currency not stated
+                              </div>
+                            )}
                           </td>
                           <td className={`${cell} text-right`}>
                             <div className="tabular-nums font-medium">{c.invoices}</div>
                             {c.invoices > 0 && <div className="text-[10.5px] text-[var(--color-ink-3)]">{c.openInvoices} open</div>}
                           </td>
-                          <td className={`${cell} whitespace-nowrap text-right tabular-nums`}>{money(c.invoiceValue, cur)}</td>
+                          <td className={`${cell} whitespace-nowrap text-right tabular-nums`}>{coded(c.invoiceValue, cur)}</td>
                           <td className={`${cell} whitespace-nowrap text-right tabular-nums ${c.received <= 0.01 ? "text-[var(--color-ink-3)]" : ""}`}>
-                            {money(c.received, cur)}
+                            {coded(c.received, cur)}
                           </td>
                           <td className={`${cell} whitespace-nowrap`}>
                             {c.lastReceipt ? (
@@ -293,11 +296,11 @@ export function CustomerSummary({
                             )}
                           </td>
                           <td className={cell}>{c.invoices > 0 ? <Collected pct={c.collectedPct} /> : <Dash />}</td>
-                          <td className={`${cell} whitespace-nowrap text-right font-semibold tabular-nums`}>{money(c.outstanding, cur)}</td>
+                          <td className={`${cell} whitespace-nowrap text-right font-semibold tabular-nums`}>{coded(c.outstanding, cur)}</td>
                           <td className={`${cell} whitespace-nowrap text-right`}>
                             {c.overdue > 0.01 ? (
                               <>
-                                <div className="font-semibold tabular-nums text-[var(--color-bad-fg)]">{money(c.overdue, cur)}</div>
+                                <div className="font-semibold tabular-nums text-[var(--color-bad-fg)]">{coded(c.overdue, cur)}</div>
                                 {c.oldestDue && <div className="text-[10.5px] text-[var(--color-ink-3)]">oldest due {day(c.oldestDue)}</div>}
                               </>
                             ) : (
@@ -309,13 +312,13 @@ export function CustomerSummary({
                               <td className={`${cell} whitespace-nowrap text-right tabular-nums`}>
                                 {Math.abs(c.onAccount) > 0.004 && c.id ? (
                                   <Link href={`${ROUTES.customer(c.id)}#on-account`} className="font-medium text-[var(--color-accent)] hover:underline">
-                                    {money(c.onAccount, cur)}
+                                    {coded(c.onAccount, cur)}
                                   </Link>
                                 ) : (
                                   <Dash />
                                 )}
                               </td>
-                              <td className={`${cell} whitespace-nowrap text-right font-semibold tabular-nums`}>{money(c.netOutstanding, cur)}</td>
+                              <td className={`${cell} whitespace-nowrap text-right font-semibold tabular-nums`}>{coded(c.netOutstanding, cur)}</td>
                             </>
                           )}
                           <td className={`${cell} min-w-[170px]`}>
@@ -333,24 +336,21 @@ export function CustomerSummary({
                         {cur ? `Total ${currency}` : "Total — no currency"}
                         <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">{rows.length} customer(s)</div>
                       </td>
-                      <td className={foot}>
-                        <CurrencyBadge code={cur} />
-                      </td>
                       <td className={`${foot} text-right`}>
                         <div className="tabular-nums">{t.invoices}</div>
                         <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">{t.open} open</div>
                       </td>
-                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{money(t.invoiced, cur)}</td>
-                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{money(t.received, cur)}</td>
+                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{coded(t.invoiced, cur)}</td>
+                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{coded(t.received, cur)}</td>
                       <td className={`${foot} whitespace-nowrap text-[10.5px] font-normal text-[var(--color-ink-3)]`}>{t.last ? `latest ${day(t.last)}` : ""}</td>
                       <td className={foot}>
                         <Collected pct={pct} />
                       </td>
-                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{money(t.outstanding, cur)}</td>
+                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{coded(t.outstanding, cur)}</td>
                       <td className={`${foot} whitespace-nowrap text-right`}>
                         {t.overdue > 0.01 ? (
                           <>
-                            <div className="tabular-nums text-[var(--color-bad-fg)]">{money(t.overdue, cur)}</div>
+                            <div className="tabular-nums text-[var(--color-bad-fg)]">{coded(t.overdue, cur)}</div>
                             <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">{t.overdueInvoices} invoice(s)</div>
                           </>
                         ) : (
@@ -360,9 +360,9 @@ export function CustomerSummary({
                       {anyOnAccount && (
                         <>
                           <td className={`${foot} whitespace-nowrap text-right tabular-nums text-[var(--color-accent)]`}>
-                            {Math.abs(t.onAccount) > 0.004 ? money(t.onAccount, cur) : <Dash />}
+                            {Math.abs(t.onAccount) > 0.004 ? coded(t.onAccount, cur) : <Dash />}
                           </td>
-                          <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{money(t.net, cur)}</td>
+                          <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{coded(t.net, cur)}</td>
                         </>
                       )}
                       <td className={foot} />
@@ -387,6 +387,16 @@ export function CustomerSummary({
       </footer>
     </section>
   );
+}
+
+/**
+ * An amount with its currency's code in front of it — USD 174,109.43, EUR
+ * 64,824.56, INR 1,23,456.00 — grouped the way that currency is. With no
+ * currency known, the digits alone: a guessed code would be worse than none.
+ */
+function coded(value: number, cur: string | null): string {
+  const digits = formatMoney(value, cur, { symbol: false });
+  return cur ? `${cur} ${digits}` : digits;
 }
 
 /** "today", "3 days ago". */
@@ -436,50 +446,5 @@ function CurrencyBadge({ code }: { code: string | null }) {
     >
       {code ?? "—"}
     </span>
-  );
-}
-
-/**
- * The currency, and where it came from.
- *
- * Editable when the row's currency is the customer's default (or there is
- * none): picking one saves it on the customer, which every invoice without a
- * currency of its own then follows. A currency every invoice states for itself
- * is not the customer's to change, so it is shown, not offered.
- */
-function CurrencyCell({ row, returnTo }: { row: Row; returnTo?: string }) {
-  const current = row.currency === "—" ? "" : row.currency;
-  const tag = row.currencySource === "erp" && (
-    <span
-      className="ml-1 rounded bg-[var(--color-info-bg)] px-1 text-[9px] font-bold uppercase text-[var(--color-info-fg)]"
-      title="The default from the main ERP's client list. Pick a currency to confirm or correct it here."
-    >
-      ERP
-    </span>
-  );
-
-  if (!returnTo || !row.id || row.currencySource === "invoice") {
-    return (
-      <>
-        <CurrencyBadge code={current || null} />
-        {tag}
-      </>
-    );
-  }
-
-  return (
-    <form action={saveCustomerAction} className="inline-flex items-center">
-      <input type="hidden" name="customerId" value={row.id} />
-      <input type="hidden" name="returnTo" value={returnTo} />
-      <AutoSelect
-        name="currency"
-        value={current}
-        options={currencyOptions(current)}
-        blankLabel="— set —"
-        label={`Currency for ${row.name}`}
-        className={`font-mono font-semibold ${current ? "" : "border-[#efd9a1] bg-[var(--color-warn-bg)]"}`}
-      />
-      {tag}
-    </form>
   );
 }

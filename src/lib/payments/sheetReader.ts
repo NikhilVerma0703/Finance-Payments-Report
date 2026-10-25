@@ -152,8 +152,14 @@ const COLUMNS: Array<[keyof SheetRow | "customsInvoiceValue", RegExp]> = [
 
 const squash = (v: unknown) => clean(v).toLowerCase().replace(/\s+/g, " ").trim();
 
+/** A currency named in a heading — "(USD)", "in EUR", "$" — set aside before
+ *  the heading is matched: "Invoice Value (USD)" is the invoice value, and the
+ *  currency it names is read on its own (findCurrency). */
+const HEADING_CURRENCY = /\(\s*(?:usd|eur|gbp|inr|aud|cad|aed|pln|mxn|chf|jpy|cny|sgd|zar|nzd|sar|hkd|[$€£₹])\s*\)|\bin\s+(?:usd|eur|gbp|inr|aud|cad|aed|pln|mxn|chf|jpy|cny|sgd|zar|nzd|sar|hkd)\b|\b(?:usd|eur|gbp|inr)\b|us\$|[$€£₹]/g;
+
 function matchColumn(text: string): string | null {
-  for (const [key, re] of COLUMNS) if (re.test(text)) return String(key);
+  const bare = text.replace(HEADING_CURRENCY, " ").replace(/\s+/g, " ").trim();
+  for (const [key, re] of COLUMNS) if (re.test(bare)) return String(key);
   return null;
 }
 
@@ -615,32 +621,128 @@ function dateInText(text: string): string | null {
 }
 
 /**
- * The currency, from how the money cells are formatted.
+ * The currency a sheet's amounts are in.
  *
- * No reference sheet states a currency in words; every money cell in all four
- * is formatted `[$$-409]`, the US dollar format. That is evidence rather than a
- * declaration, so where it came from is reported alongside it.
+ * Customer sheets rarely say it in words: the reference sheets and every sheet
+ * uploaded so far format their received and balance cells `[$$-409]`, Excel's
+ * US-dollar format, and leave the invoice value column in a plain number format
+ * — which is why reading that one column found nothing (owner, 25 Oct 2026:
+ * "automatically fetch the currency from the uploaded Excel sheets"). So the
+ * evidence is taken in order of how plainly it states the currency:
+ *
+ *   1. a Currency column, as written on the rows;
+ *   2. a money column's heading — "Invoice Value (USD)", "Amount in €";
+ *   3. the number formats on every money cell of every block — invoice value,
+ *      customs value, received, credit and debit notes, balance — the most
+ *      common one winning, and the others named;
+ *   4. the rows above the first table — "All amounts in EUR".
+ *
+ * "CAD" is never read from text: on these sheets it is Cash Against Documents.
+ * What decided it is reported with it, so a reader can see why.
  */
+const MONEY_COLUMNS: Array<[string, string]> = [
+  ["customerInvoiceValue", "invoice value"],
+  ["customsInvoiceValue", "customs value"],
+  ["received", "received"],
+  ["statedBalance", "balance"],
+  ["creditNote", "credit note"],
+  ["debitNote", "debit note"],
+];
+
+/** Excel's locale codes behind a "$" that is not the US dollar. */
+const DOLLAR_LOCALES: Record<string, string> = { "1009": "CAD", C09: "AUD", "1409": "NZD", "80A": "MXN", "4809": "SGD", "3C09": "HKD" };
+const SYMBOLS: Array<[RegExp, string]> = [
+  [/€/, "EUR"],
+  [/£/, "GBP"],
+  [/₹|\bRs\.?(?=\s|\d|$)/, "INR"],
+  [/zł/i, "PLN"],
+  [/¥/, "JPY"],
+];
+// three-letter codes read from text; CAD is left out (Cash Against Documents)
+const CODES = /\b(USD|EUR|GBP|INR|AUD|AED|PLN|MXN|CHF|JPY|CNY|SGD|ZAR|NZD|SAR|HKD|SEK|NOK|DKK|TRY|BRL)\b/;
+
+/** The currency an Excel number format shows, if it shows one. */
+export function currencyOfFormat(fmt: string | null | undefined): string | null {
+  if (!fmt) return null;
+  // a code written out: [$USD] or [$EUR-x-euro1]
+  const code = /\[\$([A-Z]{3})[-\]]/.exec(fmt);
+  if (code) return code[1];
+  // the symbol Excel's currency list writes, with its locale: [$$-409], [$€-2]
+  const sym = /\[\$([^\]-]+)-([0-9A-Fa-f]+)\]/.exec(fmt);
+  if (sym) {
+    if (sym[1] === "$") return DOLLAR_LOCALES[sym[2].toUpperCase()] ?? "USD";
+    for (const [re, c] of SYMBOLS) if (re.test(sym[1])) return c;
+  }
+  // a symbol typed into the format: "$"#,##0.00, \$#,##0, €#,##0 — once the
+  // [colour] and [$-locale] sections are out of the way
+  const literal = fmt.replace(/\[[^\]]*\]/g, "");
+  if (/\$/.test(literal)) return "USD";
+  for (const [re, c] of SYMBOLS) if (re.test(literal)) return c;
+  return CODES.exec(literal.toUpperCase())?.[1] ?? null;
+}
+
+/** The currency a heading or a caption names, if it names one. */
+export function currencyOfText(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const code = CODES.exec(text.toUpperCase());
+  if (code) return code[1];
+  if (/\$/.test(text)) return "USD";
+  for (const [re, c] of SYMBOLS) if (re.test(text)) return c;
+  if (/\bdollars?\b/i.test(text)) return "USD";
+  if (/\beuros?\b/i.test(text)) return "EUR";
+  if (/\brupees?\b/i.test(text)) return "INR";
+  return null;
+}
+
 function findCurrency(
   ws: ExcelJS.Worksheet,
   blocks: SheetBlock[],
 ): { code: string | null; source: string } {
+  // 1. stated on the rows
   for (const b of blocks) {
     const stated = b.rows.find((r) => r.currency)?.currency;
-    if (stated) return { code: stated.toUpperCase().slice(0, 3), source: "a Currency column" };
+    const code = stated ? (currencyOfText(stated) ?? stated.trim().toUpperCase().slice(0, 3)) : null;
+    if (code) return { code, source: "a Currency column" };
+  }
 
-    const col = b.mapping.customerInvoiceValue ?? b.mapping.statedBalance;
-    if (!col) continue;
-    for (const row of b.rows) {
-      const fmt = ws.getCell(`${col}${row.sourceRow}`).numFmt ?? "";
-      if (/\[\$\$-/.test(fmt) || /(^|[^A-Z])\$/.test(fmt)) {
-        return { code: "USD", source: "the US dollar number format on the money cells" };
+  // 2. a money column's heading
+  for (const b of blocks) {
+    for (const [key, name] of MONEY_COLUMNS) {
+      const col = b.mapping[key];
+      const code = col ? currencyOfText(textOf(ws.getCell(`${col}${b.headerRow}`))) : null;
+      if (code) return { code, source: `the heading of the ${name} column` };
+    }
+  }
+
+  // 3. the number formats on the money cells, the most common winning
+  const votes = new Map<string, number>();
+  for (const b of blocks) {
+    for (const [key] of MONEY_COLUMNS) {
+      const col = b.mapping[key];
+      if (!col) continue;
+      for (const row of b.rows) {
+        const code = currencyOfFormat(ws.getCell(`${col}${row.sourceRow}`).numFmt);
+        if (code) votes.set(code, (votes.get(code) ?? 0) + 1);
       }
-      const m = /\[\$([A-Z]{3})/.exec(fmt);
-      if (m) return { code: m[1], source: `the '${m[1]}' number format on the money cells` };
-      if (/₹|INR/.test(fmt)) {
-        return { code: "INR", source: "the rupee number format on the money cells" };
-      }
+    }
+  }
+  if (votes.size) {
+    const [[code, cells], ...others] = [...votes.entries()].sort((x, y) => y[1] - x[1]);
+    return {
+      code,
+      source:
+        `the ${code} number format on ${cells} money cell(s)` +
+        (others.length ? ` (also ${others.map(([c, n]) => `${c} on ${n}`).join(", ")})` : ""),
+    };
+  }
+
+  // 4. the rows above the first table
+  const top = Math.min(...blocks.map((b) => b.headerRow), ws.rowCount + 1);
+  for (let r = 1; r < top; r += 1) {
+    for (let c = 1; c <= ws.columnCount; c += 1) {
+      const text = textOf(ws.getCell(r, c));
+      const code = currencyOfText(text);
+      if (code) return { code, source: `"${(text ?? "").slice(0, 40)}" above the table` };
     }
   }
   return { code: null, source: "not stated anywhere in the sheet" };
