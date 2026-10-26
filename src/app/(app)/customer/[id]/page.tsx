@@ -22,6 +22,8 @@ import { countryOptions, currencyLabel, currencyOptions } from "@/lib/choices";
 import { SUPPORTED_TERMS } from "@/lib/payments/terms";
 import { deleteCustomerAction, saveCustomerAction } from "@/server/payments/actions";
 import { customerHistory } from "@/server/payments/audit";
+import { isSettled } from "@/lib/payments/completed";
+import { markCompletedAction } from "@/server/payments/managementActions";
 import { loadCustomer } from "@/server/payments/query";
 import { ROUTES } from "@/lib/routes";
 
@@ -32,11 +34,11 @@ export default async function CustomerDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ onAccount?: string }>;
+  searchParams: Promise<{ onAccount?: string; done?: string }>;
 }) {
   const { id } = await params;
-  const { onAccount: message } = await searchParams;
-  const { customer, invoices, onAccount, erp, kpis, today } = await loadCustomer(id);
+  const { onAccount: message, done } = await searchParams;
+  const { customer, invoices, completed, onAccount, erp, kpis, today } = await loadCustomer(id);
   if (!customer) notFound();
 
   // the currency this customer's invoices fall back to, and where it came from
@@ -149,6 +151,32 @@ export default async function CustomerDetailPage({
               />
             </section>
           ))}
+        </div>
+      )}
+
+      {done && (
+        <div className="mb-4 rounded-lg border border-[#c6dcf3] bg-[var(--color-info-bg)] px-3 py-2 text-[12px] text-[var(--color-info-fg)]">{done}</div>
+      )}
+
+      {/* the customer's settled invoices can leave its active list in one go (owner, 25 Oct 2026) */}
+      {(invoices.some(isSettled) || completed.length > 0) && (
+        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--color-line)] bg-white px-4 py-3 text-[13px]">
+          {invoices.some(isSettled) && (
+            <form action={markCompletedAction}>
+              {invoices.filter(isSettled).map((i) => (
+                <input key={i.id} type="hidden" name="id" value={i.id} />
+              ))}
+              <input type="hidden" name="returnTo" value={ROUTES.customer(customer.id)} />
+              <button type="submit" className="btn-ghost btn-sm">
+                Mark {invoices.filter(isSettled).length} fully settled invoice(s) as completed
+              </button>
+            </form>
+          )}
+          {completed.length > 0 && (
+            <Link href={`${ROUTES.completed}?${new URLSearchParams({ customer: customer.name ?? "" }).toString()}`} className="link">
+              {completed.length} completed invoice(s), out of this list →
+            </Link>
+          )}
         </div>
       )}
 

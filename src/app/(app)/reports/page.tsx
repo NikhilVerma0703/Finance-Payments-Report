@@ -52,9 +52,14 @@ export default async function ReportsPage({
         title="Reports & Downloads Sheets"
         lead="Choose the records, check them here, and download a formatted Excel report."
         actions={
-          <Link href={`${ROUTES.exportReport}?${query}`} className="btn">
-            Export Sheet
-          </Link>
+          <>
+            <Link href={ROUTES.ageing} className="btn-ghost">
+              Ageing analysis &amp; customer payment performance
+            </Link>
+            <Link href={`${ROUTES.exportReport}?${query}`} className="btn">
+              Export Sheet
+            </Link>
+          </>
         }
       />
 

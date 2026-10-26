@@ -19,12 +19,15 @@
  * URL rather than state: it survives a reload and can be shared.
  */
 import Link from "next/link";
+import { cloneElement, type ReactElement } from "react";
 
 import { BASIS_LABELS } from "@/lib/payments/terms";
 import { ROUTES } from "@/lib/routes";
 import type { TrackedInvoice } from "@/lib/payments/record";
 import type { InvoiceGroup, SortKey } from "@/server/payments/query";
 import { day, homeMoney, money, rate, StatusChip, TONE_CLASS } from "./bits";
+import { SelectAllBox } from "./BulkBar";
+import { ColumnChooser } from "./ColumnChooser";
 
 /** The column groups, and the columns inside each. */
 const GROUPS: Array<{
@@ -108,7 +111,39 @@ const GROUPS: Array<{
   },
 ];
 
-const TOTAL_COLUMNS = GROUPS.reduce((s, g) => s + g.columns.length, 0);
+/** A column's key, from its heading: "Invoice Value" → invoice-value. */
+const colKey = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+/** Every column, flat, in GROUPS order, with its group. */
+const FLAT = GROUPS.flatMap((g, gi) => g.columns.map((c, ci) => ({ ...c, key: colKey(c.label), group: gi, first: ci === 0 })));
+
+/** The # and the invoice number are always shown. */
+const ALWAYS = new Set(["", "invoice-no"]);
+
+/** The cookie a column choice is remembered in (ColumnChooser writes it). */
+export const COLUMNS_COOKIE = "pt_cols";
+
+/**
+ * The columns chosen one by one (owner, 25 Oct 2026: "Allow users to choose
+ * which columns to display"): ?col=… when the URL says, else the choice
+ * remembered in this browser (the pt_cols cookie, dot-separated), else none —
+ * every column — and none for ?col=all, "Every column". Unknown keys are
+ * dropped.
+ */
+export function columnsFrom(param: string | string[] | undefined, remembered: string | undefined): string[] {
+  const raw = param === undefined ? (remembered ?? "").split(".") : Array.isArray(param) ? param : [param];
+  if (raw.includes("all")) return [];
+  const known = new Set(FLAT.map((c) => c.key));
+  return [...new Set(raw.filter((k) => known.has(k) && !ALWAYS.has(k)))];
+}
+
+/** The query a table's links keep, with the columns chosen. */
+export function withColumns(query: string, chosen: string[]): string {
+  const p = new URLSearchParams(query);
+  p.delete("col");
+  for (const key of chosen) p.append("col", key);
+  return p.toString();
+}
 
 function sortHref(
   basePath: string,
@@ -130,6 +165,9 @@ export function MasterTable({
   dir,
   showHeadings,
   basePath = ROUTES.dashboard,
+  chosen = [],
+  select,
+  chooser = false,
 }: {
   groups: InvoiceGroup[];
   query: string;
@@ -138,9 +176,58 @@ export function MasterTable({
   showHeadings: boolean;
   /** The page the sort links return to, with the same filters. */
   basePath?: string;
+  /** Columns chosen one by one (columnsFrom); none means every column. */
+  chosen?: string[];
+  /** The id of the form a BulkBar draws: each row gets a tick box in it. */
+  select?: string;
+  /** Draw the "Choose columns" control above the table. */
+  chooser?: boolean;
 }) {
+  const picked = new Set(chosen);
+  const shown = FLAT.map((c, n) => ({ c, n })).filter(({ c }) => !chosen.length || ALWAYS.has(c.key) || picked.has(c.key)).map(({ n }) => n);
+  // a rule before the first shown column of each group, but the first group
+  const edges = new Set(shown.filter((n, i) => i > 0 && FLAT[n].group !== FLAT[shown[i - 1]].group));
+  const blocks = GROUPS.map((g, gi) => ({ title: g.title, span: shown.filter((n) => FLAT[n].group === gi).length })).filter((b) => b.span > 0);
+  const keepForChooser = [...new URLSearchParams(query).entries()].filter(([k]) => k !== "col");
+  const choices = GROUPS.map((g) => ({
+    title: g.title,
+    columns: g.columns
+      .map((c) => ({ key: colKey(c.label), label: c.label }))
+      .filter((c) => !ALWAYS.has(c.key))
+      .map((c) => ({ ...c, shown: !chosen.length || picked.has(c.key) })),
+  }));
+  const cur = (g: InvoiceGroup) => (g.totals.currency === "mixed" ? null : g.totals.currency);
+  /** What a group's total row says under each column. */
+  const foot = (g: InvoiceGroup, key: string): React.ReactNode => {
+    if (key === "invoice-value") return money(g.totals.invoiceValue, cur(g));
+    if (key === "received") return money(g.totals.received, cur(g));
+    if (key === "collected") return `${g.totals.collectedPct}%`;
+    if (key === "outstanding") return money(g.totals.outstanding, cur(g));
+    if (key === "status")
+      return g.totals.overdue > 0.01 ? (
+        <span className="text-[11px] font-normal text-[var(--color-bad-fg)]">{money(g.totals.overdue, cur(g))} past due</span>
+      ) : null;
+    if (key === "source")
+      return g.totals.dueDatesKnown < g.totals.invoices ? (
+        <span className="text-[11px] font-normal text-[var(--color-ink-3)]">
+          due dates: {g.totals.dueDatesKnown}/{g.totals.invoices}
+        </span>
+      ) : null;
+    return null;
+  };
+
   return (
     <div className="space-y-4">
+      {chooser && (
+        <div className="flex flex-wrap items-center gap-2 text-[12px]">
+          <ColumnChooser cookieName={COLUMNS_COOKIE} basePath={basePath} keep={keepForChooser} groups={choices} chosen={chosen} />
+          {chosen.length > 0 && (
+            <span className="text-[var(--color-ink-3)]">
+              {shown.length} of {FLAT.length} columns shown
+            </span>
+          )}
+        </div>
+      )}
       {groups.map((group) => (
         <section key={group.key} className="card">
           {showHeadings && (
@@ -189,10 +276,10 @@ export function MasterTable({
             <table className="w-full text-[12px]">
               <thead>
                 <tr className="bg-[#e4ebf3] text-left text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-2)]">
-                  {GROUPS.map((g, i) => (
+                  {blocks.map((g, i) => (
                     <th
                       key={g.title}
-                      colSpan={g.columns.length}
+                      colSpan={g.span + (i === 0 && select ? 1 : 0)}
                       className={`px-2 py-1.5 ${i > 0 ? "border-l-2 border-white" : ""}`}
                     >
                       {g.title}
@@ -200,14 +287,20 @@ export function MasterTable({
                   ))}
                 </tr>
                 <tr className="bg-[#eef2f7] text-left text-[10px] uppercase tracking-wide text-[var(--color-ink-2)]">
-                  {GROUPS.flatMap((g, gi) =>
-                    g.columns.map((c, ci) => (
+                  {select && (
+                    <th className="px-2 py-2 text-center">
+                      <SelectAllBox formId={select} />
+                    </th>
+                  )}
+                  {shown.map((n) => {
+                    const c = FLAT[n];
+                    return (
                       <th
-                        key={`${g.title}-${c.label}`}
+                        key={c.key || "no"}
                         title={c.hint}
-                        className={`whitespace-nowrap px-2 py-2 font-medium ${
-                          gi > 0 && ci === 0 ? "border-l-2 border-[var(--color-line)]" : ""
-                        } ${c.align === "right" ? "text-right" : ""}`}
+                        className={`whitespace-nowrap px-2 py-2 font-medium ${edges.has(n) ? "border-l-2 border-[var(--color-line)]" : ""} ${
+                          c.align === "right" ? "text-right" : ""
+                        }`}
                       >
                         {c.sort ? (
                           <Link href={sortHref(basePath, query, c.sort, sort, dir)} className="hover:underline">
@@ -218,44 +311,28 @@ export function MasterTable({
                           c.label
                         )}
                       </th>
-                    )),
-                  )}
+                    );
+                  })}
                 </tr>
               </thead>
 
               <tbody>
                 {group.rows.map((invoice, index) => (
-                  <Row key={invoice.id} invoice={invoice} index={index + 1} />
+                  <Row key={invoice.id} invoice={invoice} index={index + 1} shown={shown} edges={edges} select={select} />
                 ))}
               </tbody>
 
               <tfoot>
                 <tr className="border-t-2 border-[var(--color-line)] bg-[#f7f9fc] font-semibold">
-                  <td className="px-2 py-2" colSpan={5}>
+                  <td className="whitespace-nowrap px-2 py-2" colSpan={2 + (select ? 1 : 0)}>
                     {group.totals.invoices} invoice(s)
                     {group.totals.currency === "mixed" && " — mixed currencies"}
                   </td>
-                  <td className="px-2 py-2 text-right tabular-nums">{money(group.totals.invoiceValue, group.totals.currency === "mixed" ? null : group.totals.currency)}</td>
-                  <td className="px-2 py-2" colSpan={3} />
-                  <td className="px-2 py-2" colSpan={3} />
-                  <td className="px-2 py-2" colSpan={6} />
-                  <td className="px-2 py-2 text-right tabular-nums" colSpan={2}>
-                    {money(group.totals.received, group.totals.currency === "mixed" ? null : group.totals.currency)}
-                  </td>
-                  <td className="px-2 py-2" />
-                  <td className="px-2 py-2 text-right tabular-nums">{group.totals.collectedPct}%</td>
-                  <td className="px-2 py-2" />
-                  <td className="px-2 py-2" colSpan={2} />
-                  <td className="px-2 py-2 text-right tabular-nums">{money(group.totals.outstanding, group.totals.currency === "mixed" ? null : group.totals.currency)}</td>
-                  <td className="px-2 py-2" colSpan={2} />
-                  <td className="px-2 py-2 text-[11px] font-normal text-[var(--color-bad-fg)]">
-                    {group.totals.overdue > 0.01 ? `${money(group.totals.overdue, group.totals.currency === "mixed" ? null : group.totals.currency)} past due` : ""}
-                  </td>
-                  <td className="px-2 py-2" colSpan={8} />
-                  <td className="px-2 py-2 text-[11px] font-normal text-[var(--color-ink-3)]" colSpan={3}>
-                    {group.totals.dueDatesKnown < group.totals.invoices &&
-                      `due dates: ${group.totals.dueDatesKnown}/${group.totals.invoices}`}
-                  </td>
+                  {shown.slice(2).map((n) => (
+                    <td key={n} className={`whitespace-nowrap px-2 py-2 ${FLAT[n].align === "right" ? "text-right tabular-nums" : ""}`}>
+                      {foot(group, FLAT[n].key)}
+                    </td>
+                  ))}
                 </tr>
               </tfoot>
             </table>
@@ -272,194 +349,223 @@ export function MasterTable({
   );
 }
 
-function Row({ invoice, index }: { invoice: TrackedInvoice; index: number }) {
+/** Every cell of an invoice's row, in GROUPS order (one per column). */
+function cellsOf(invoice: TrackedInvoice, index: number): ReactElement<{ className?: string }>[] {
   const m = invoice.money;
   const s = invoice.schedule;
   const late = (invoice.overdueDays ?? 0) > 0;
   const cell = "whitespace-nowrap px-2 py-2";
-  const edge = "border-l-2 border-[var(--color-line)]";
+  return [
+    <td key="c0" className={`${cell} text-[var(--color-ink-3)] tabular-nums`}>{index}</td>,
+    <td key="c1" className={`${cell} font-medium`}>
+              <Link href={ROUTES.invoice(invoice.id)} className="link">
+                {invoice.invoiceNo ?? <span className="italic text-[var(--color-ink-3)]">no number</span>}
+              </Link>
+            </td>,
+    <td key="c2" className={cell}>
+              {invoice.customerId ? (
+                <Link
+                  href={`${ROUTES.customer(invoice.customerId)}#on-account`}
+                  className="rounded-md bg-[#e6f4f2] px-1.5 py-0.5 text-[13.5px] font-bold text-[var(--color-accent)] hover:bg-[#d3ece8] hover:underline"
+                  title="Adjust this customer's payments"
+                >
+                  {invoice.customerName}
+                </Link>
+              ) : (
+                <span className="italic text-[var(--color-ink-3)]">no customer</span>
+              )}
+            </td>,
+    <td key="c3" className={cell}>{day(invoice.invoiceDate)}</td>,
+    <td key="c4" className={cell}>{invoice.currency ?? "—"}</td>,
+    <td key="c5" className={`${cell} text-right tabular-nums`}>{money(invoice.customerInvoiceValue, invoice.currency)}</td>,
+    <td key="c6" className={`${cell} text-right tabular-nums text-[var(--color-ink-3)]`}>
+              {money(invoice.customsInvoiceValue, invoice.currency)}
+            </td>,
+    <td key="c7" className={`${cell} text-right tabular-nums`}>{rate(invoice.exchangeRate)}</td>,
+    <td key="c8" className={`${cell} text-right tabular-nums text-[var(--color-ink-3)]`}>
+              {homeMoney(m.homeInvoiceValue)}
+            </td>,
+    <td key="c9" className={`px-2 py-2`}>
+              <span className="block max-w-[14ch] truncate" title={invoice.consignee ?? undefined}>
+                {invoice.consignee ?? "—"}
+              </span>
+            </td>,
+    <td key="c10" className="px-2 py-2">
+              <span className="block max-w-[14ch] truncate" title={invoice.notifyParty ?? undefined}>
+                {invoice.notifyParty ?? "—"}
+              </span>
+            </td>,
+    <td key="c11" className={cell}>{invoice.country ?? "—"}</td>,
+    <td key="c12" className={`px-2 py-2`} title={s.term.raw || "No payment terms recorded"}>
+              <span className="block max-w-[18ch] truncate">
+                {s.term.raw || <span className="italic text-[var(--color-ink-3)]">none</span>}
+              </span>
+              {s.milestones.length > 1 && (
+                <span className="text-[10px] text-[var(--color-ink-3)]">
+                  {s.milestones.length} milestones
+                </span>
+              )}
+            </td>,
+    <td key="c13" className={cell} title={s.dueDateNote}>
+              {s.dueDate ? (
+                <>
+                  {day(s.dueDate)}
+                  {s.dueDateSource === "entered" && (
+                    <div className="text-[10px] text-[var(--color-warn-fg)]">as entered</div>
+                  )}
+                  {s.dueDateSource === "default" && (
+                    <div className="text-[10px] text-[var(--color-warn-fg)]">default — terms give none</div>
+                  )}
+                </>
+              ) : (
+                <span className="text-[var(--color-warn-fg)]">needs verification</span>
+              )}
+            </td>,
+    <td key="c14" className={`${cell} text-[10px] text-[var(--color-ink-3)]`}>
+              {s.dueDateSource === "calculated" && s.milestones.length
+                ? BASIS_LABELS[s.milestones[0].basis]
+                : s.dueDateSource === "entered"
+                  ? "entered"
+                  : s.dueDateSource === "default"
+                    ? "invoice date (default)"
+                    : "—"}
+            </td>,
+    <td key="c15"
+              className={`${cell} tabular-nums ${late ? "font-semibold text-[var(--color-bad-fg)]" : "text-[var(--color-ink-3)]"}`}
+            >
+              {invoice.overdueDays === null
+                ? "—"
+                : late
+                  ? `${invoice.overdueDays}d`
+                  : `in ${Math.abs(invoice.overdueDays)}d`}
+            </td>,
+    <td key="c16" className={`${cell} tabular-nums text-[var(--color-ink-3)]`}>
+              {invoice.invoiceAge === null ? "—" : `${invoice.invoiceAge}d`}
+            </td>,
+    <td key="c17" className={cell}>{invoice.ageing}</td>,
+    <td key="c18" className={`${cell} text-right tabular-nums`}>{m.receiptCount || "—"}</td>,
+    <td key="c19" className={`${cell} text-right tabular-nums`}>
+              {m.totalReceived ? money(m.totalReceived, invoice.currency) : "—"}
+            </td>,
+    <td key="c20" className={cell}>{day(invoice.lastReceiptDate)}</td>,
+    <td key="c21" className={`${cell} text-right tabular-nums text-[var(--color-ink-3)]`}>
+              {m.collectedPct === null ? "—" : `${m.collectedPct}%`}
+            </td>,
+    <td key="c22"
+              className={`${cell} text-right tabular-nums ${
+                m.totalForexGainLoss === null
+                  ? "text-[var(--color-ink-3)]"
+                  : m.totalForexGainLoss >= 0
+                    ? "text-[var(--color-ok-fg)]"
+                    : "text-[var(--color-bad-fg)]"
+              }`}
+              title={m.forexNote ?? undefined}
+            >
+              {m.totalForexGainLoss === null ? "—" : homeMoney(m.totalForexGainLoss)}
+            </td>,
+    <td key="c23" className={`${cell} text-right tabular-nums`}>
+              {m.creditNotes > 0.01 ? money(m.creditNotes, invoice.currency) : "—"}
+            </td>,
+    <td key="c24" className={`${cell} text-right tabular-nums`}>
+              {m.debitNotes > 0.01 ? money(m.debitNotes, invoice.currency) : "—"}
+            </td>,
+    <td key="c25" className={`${cell} text-right font-semibold tabular-nums`}>
+              {money(m.calculatedOutstanding, invoice.currency)}
+              {s.overdueAmount > 0.01 && s.overdueAmount < (m.calculatedOutstanding ?? 0) - 0.01 && (
+                <div
+                  className="text-[10px] font-normal text-[var(--color-bad-fg)]"
+                  title="A split payment term: only this much has actually fallen due."
+                >
+                  {money(s.overdueAmount, invoice.currency)} due
+                </div>
+              )}
+            </td>,
+    <td key="c26" className={`${cell} text-right tabular-nums text-[var(--color-ink-3)]`}>
+              {money(m.booksBalance, invoice.currency)}
+            </td>,
+    <td key="c27"
+              className={`${cell} text-right tabular-nums ${
+                m.booksDifference !== null && Math.abs(m.booksDifference) > 0.01
+                  ? "font-semibold text-[var(--color-bad-fg)]"
+                  : "text-[var(--color-ink-3)]"
+              }`}
+            >
+              {money(m.booksDifference, invoice.currency)}
+            </td>,
+    <td key="c28" className={cell}>
+              <StatusChip status={invoice.status} note={invoice.statusNote} />
+            </td>,
+    <td key="c29" className={`${cell}`}>{invoice.piNo ?? "—"}</td>,
+    <td key="c30" className={cell}>{invoice.poNo ?? "—"}</td>,
+    <td key="c31" className={cell}>{invoice.shippingBillNo ?? "—"}</td>,
+    <td key="c32" className={cell}>{day(invoice.shippingBillDate)}</td>,
+    <td key="c33" className={cell}>{invoice.blNo ?? "—"}</td>,
+    <td key="c34" className={cell}>{day(invoice.blDate)}</td>,
+    <td key="c35" className={cell}>{invoice.containerNo ?? "—"}</td>,
+    <td key="c36" className={cell}>{day(invoice.eta)}</td>,
+    <td key="c37" className={`px-2 py-2`}>
+              <span className="block max-w-[20ch] truncate" title={invoice.remarks ?? undefined}>
+                {invoice.remarks ?? "—"}
+              </span>
+            </td>,
+    <td key="c38" className="px-2 py-2">
+              <span className="block max-w-[20ch] truncate" title={invoice.followUpNotes ?? undefined}>
+                {invoice.followUpNotes ?? "—"}
+              </span>
+            </td>,
+    <td key="c39" className={`${cell} text-[10px] text-[var(--color-ink-3)]`}>
+              {invoice.source === "EXCEL" ? "Excel" : "Manual"}
+              {invoice.sourceAsOn && <div>as on {day(invoice.sourceAsOn)}</div>}
+            </td>
+  ];
+}
+
+function Row({
+  invoice,
+  index,
+  shown,
+  edges,
+  select,
+}: {
+  invoice: TrackedInvoice;
+  index: number;
+  /** The indexes (in GROUPS order) of the columns shown. */
+  shown: number[];
+  /** Of those, the ones that open a group, drawn with a rule before them. */
+  edges: Set<number>;
+  /** The id of the BulkBar's form: the row gets a tick box in it. */
+  select?: string;
+}) {
+  const m = invoice.money;
+  const s = invoice.schedule;
+  const all = cellsOf(invoice, index);
+  const span = shown.length + (select ? 1 : 0);
 
   return (
     <>
       <tr className="border-t border-[var(--color-line)] align-top">
-        {/* ---- Invoice */}
-        <td className={`${cell} text-[var(--color-ink-3)] tabular-nums`}>{index}</td>
-        <td className={`${cell} font-medium`}>
-          <Link href={ROUTES.invoice(invoice.id)} className="link">
-            {invoice.invoiceNo ?? <span className="italic text-[var(--color-ink-3)]">no number</span>}
-          </Link>
-        </td>
-        <td className={cell}>
-          {invoice.customerId ? (
-            <Link
-              href={`${ROUTES.customer(invoice.customerId)}#on-account`}
-              className="rounded-md bg-[#e6f4f2] px-1.5 py-0.5 text-[13.5px] font-bold text-[var(--color-accent)] hover:bg-[#d3ece8] hover:underline"
-              title="Adjust this customer's payments"
-            >
-              {invoice.customerName}
-            </Link>
-          ) : (
-            <span className="italic text-[var(--color-ink-3)]">no customer</span>
-          )}
-        </td>
-        <td className={cell}>{day(invoice.invoiceDate)}</td>
-        <td className={cell}>{invoice.currency ?? "—"}</td>
-        <td className={`${cell} text-right tabular-nums`}>{money(invoice.customerInvoiceValue, invoice.currency)}</td>
-        <td className={`${cell} text-right tabular-nums text-[var(--color-ink-3)]`}>
-          {money(invoice.customsInvoiceValue, invoice.currency)}
-        </td>
-        <td className={`${cell} text-right tabular-nums`}>{rate(invoice.exchangeRate)}</td>
-        <td className={`${cell} text-right tabular-nums text-[var(--color-ink-3)]`}>
-          {homeMoney(m.homeInvoiceValue)}
-        </td>
-
-        {/* ---- Parties */}
-        <td className={`px-2 py-2 ${edge}`}>
-          <span className="block max-w-[14ch] truncate" title={invoice.consignee ?? undefined}>
-            {invoice.consignee ?? "—"}
-          </span>
-        </td>
-        <td className="px-2 py-2">
-          <span className="block max-w-[14ch] truncate" title={invoice.notifyParty ?? undefined}>
-            {invoice.notifyParty ?? "—"}
-          </span>
-        </td>
-        <td className={cell}>{invoice.country ?? "—"}</td>
-
-        {/* ---- Terms & dates */}
-        <td className={`px-2 py-2 ${edge}`} title={s.term.raw || "No payment terms recorded"}>
-          <span className="block max-w-[18ch] truncate">
-            {s.term.raw || <span className="italic text-[var(--color-ink-3)]">none</span>}
-          </span>
-          {s.milestones.length > 1 && (
-            <span className="text-[10px] text-[var(--color-ink-3)]">
-              {s.milestones.length} milestones
-            </span>
-          )}
-        </td>
-        <td className={cell} title={s.dueDateNote}>
-          {s.dueDate ? (
-            <>
-              {day(s.dueDate)}
-              {s.dueDateSource === "entered" && (
-                <div className="text-[10px] text-[var(--color-warn-fg)]">as entered</div>
-              )}
-              {s.dueDateSource === "default" && (
-                <div className="text-[10px] text-[var(--color-warn-fg)]">default — terms give none</div>
-              )}
-            </>
-          ) : (
-            <span className="text-[var(--color-warn-fg)]">needs verification</span>
-          )}
-        </td>
-        <td className={`${cell} text-[10px] text-[var(--color-ink-3)]`}>
-          {s.dueDateSource === "calculated" && s.milestones.length
-            ? BASIS_LABELS[s.milestones[0].basis]
-            : s.dueDateSource === "entered"
-              ? "entered"
-              : s.dueDateSource === "default"
-                ? "invoice date (default)"
-                : "—"}
-        </td>
-        <td
-          className={`${cell} tabular-nums ${late ? "font-semibold text-[var(--color-bad-fg)]" : "text-[var(--color-ink-3)]"}`}
-        >
-          {invoice.overdueDays === null
-            ? "—"
-            : late
-              ? `${invoice.overdueDays}d`
-              : `in ${Math.abs(invoice.overdueDays)}d`}
-        </td>
-        <td className={`${cell} tabular-nums text-[var(--color-ink-3)]`}>
-          {invoice.invoiceAge === null ? "—" : `${invoice.invoiceAge}d`}
-        </td>
-        <td className={cell}>{invoice.ageing}</td>
-
-        {/* ---- Receipts */}
-        <td className={`${cell} ${edge} text-right tabular-nums`}>{m.receiptCount || "—"}</td>
-        <td className={`${cell} text-right tabular-nums`}>
-          {m.totalReceived ? money(m.totalReceived, invoice.currency) : "—"}
-        </td>
-        <td className={cell}>{day(invoice.lastReceiptDate)}</td>
-        <td className={`${cell} text-right tabular-nums text-[var(--color-ink-3)]`}>
-          {m.collectedPct === null ? "—" : `${m.collectedPct}%`}
-        </td>
-        <td
-          className={`${cell} text-right tabular-nums ${
-            m.totalForexGainLoss === null
-              ? "text-[var(--color-ink-3)]"
-              : m.totalForexGainLoss >= 0
-                ? "text-[var(--color-ok-fg)]"
-                : "text-[var(--color-bad-fg)]"
-          }`}
-          title={m.forexNote ?? undefined}
-        >
-          {m.totalForexGainLoss === null ? "—" : homeMoney(m.totalForexGainLoss)}
-        </td>
-
-        {/* ---- Balance */}
-        <td className={`${cell} ${edge} text-right tabular-nums`}>
-          {m.creditNotes > 0.01 ? money(m.creditNotes, invoice.currency) : "—"}
-        </td>
-        <td className={`${cell} text-right tabular-nums`}>
-          {m.debitNotes > 0.01 ? money(m.debitNotes, invoice.currency) : "—"}
-        </td>
-        <td className={`${cell} text-right font-semibold tabular-nums`}>
-          {money(m.calculatedOutstanding, invoice.currency)}
-          {s.overdueAmount > 0.01 && s.overdueAmount < (m.calculatedOutstanding ?? 0) - 0.01 && (
-            <div
-              className="text-[10px] font-normal text-[var(--color-bad-fg)]"
-              title="A split payment term: only this much has actually fallen due."
-            >
-              {money(s.overdueAmount, invoice.currency)} due
-            </div>
-          )}
-        </td>
-        <td className={`${cell} text-right tabular-nums text-[var(--color-ink-3)]`}>
-          {money(m.booksBalance, invoice.currency)}
-        </td>
-        <td
-          className={`${cell} text-right tabular-nums ${
-            m.booksDifference !== null && Math.abs(m.booksDifference) > 0.01
-              ? "font-semibold text-[var(--color-bad-fg)]"
-              : "text-[var(--color-ink-3)]"
-          }`}
-        >
-          {money(m.booksDifference, invoice.currency)}
-        </td>
-        <td className={cell}>
-          <StatusChip status={invoice.status} note={invoice.statusNote} />
-        </td>
-
-        {/* ---- Shipping */}
-        <td className={`${cell} ${edge}`}>{invoice.piNo ?? "—"}</td>
-        <td className={cell}>{invoice.poNo ?? "—"}</td>
-        <td className={cell}>{invoice.shippingBillNo ?? "—"}</td>
-        <td className={cell}>{day(invoice.shippingBillDate)}</td>
-        <td className={cell}>{invoice.blNo ?? "—"}</td>
-        <td className={cell}>{day(invoice.blDate)}</td>
-        <td className={cell}>{invoice.containerNo ?? "—"}</td>
-        <td className={cell}>{day(invoice.eta)}</td>
-
-        {/* ---- Tracking */}
-        <td className={`px-2 py-2 ${edge}`}>
-          <span className="block max-w-[20ch] truncate" title={invoice.remarks ?? undefined}>
-            {invoice.remarks ?? "—"}
-          </span>
-        </td>
-        <td className="px-2 py-2">
-          <span className="block max-w-[20ch] truncate" title={invoice.followUpNotes ?? undefined}>
-            {invoice.followUpNotes ?? "—"}
-          </span>
-        </td>
-        <td className={`${cell} text-[10px] text-[var(--color-ink-3)]`}>
-          {invoice.source === "EXCEL" ? "Excel" : "Manual"}
-          {invoice.sourceAsOn && <div>as on {day(invoice.sourceAsOn)}</div>}
-        </td>
+        {select && (
+          <td className="px-2 py-2 text-center">
+            <input
+              type="checkbox"
+              name="id"
+              value={invoice.id}
+              form={select}
+              aria-label={`Select invoice ${invoice.invoiceNo ?? "with no number"}`}
+              className="h-4 w-4 accent-[var(--color-brand)]"
+            />
+          </td>
+        )}
+        {shown.map((n) =>
+          cloneElement(all[n], {
+            key: n,
+            className: `${all[n].props.className ?? ""}${edges.has(n) ? " border-l-2 border-[var(--color-line)]" : ""}`,
+          }),
+        )}
       </tr>
 
       <tr className="border-t border-dashed border-[var(--color-line)]">
-        <td colSpan={TOTAL_COLUMNS} className="p-0">
+        <td colSpan={span} className="p-0">
           <details className="group">
             <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-2 py-1.5 text-[11px] hover:bg-[#f7f9fc]">
               <span className="text-[var(--color-ink-3)] group-open:hidden">▸</span>

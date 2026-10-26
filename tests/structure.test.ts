@@ -22,11 +22,12 @@ function files(dir: string): string[] {
 }
 const SOURCE = files("src").filter((f) => /\.(ts|tsx)$/.test(f));
 
-describe("seven sections, in order", () => {
-  it("the navigation is exactly the seven sections", () => {
+describe("eight sections, in order", () => {
+  it("the navigation is exactly the eight sections", () => {
     expect(NAV.map((n) => n.label)).toEqual([
       "Dashboard",
       "Master Table",
+      "Completed Invoices",
       "Search Invoices",
       "Upload Sheet",
       "New Record",

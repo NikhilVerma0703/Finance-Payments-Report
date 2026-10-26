@@ -40,6 +40,8 @@ import {
   saveReceiptAction,
 } from "@/server/payments/actions";
 import { invoiceHistory } from "@/server/payments/audit";
+import { isSettled } from "@/lib/payments/completed";
+import { markCompletedAction, restoreActiveAction } from "@/server/payments/managementActions";
 import { attributeOnAccountAction } from "@/server/payments/onAccountActions";
 import { ROUTES } from "@/lib/routes";
 import { loadInvoice } from "@/server/payments/query";
@@ -58,10 +60,10 @@ export default async function InvoiceDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ saved?: string; onAccount?: string }>;
+  searchParams: Promise<{ saved?: string; onAccount?: string; done?: string }>;
 }) {
   const { id } = await params;
-  const { saved, onAccount: onAccountMessage } = await searchParams;
+  const { saved, onAccount: onAccountMessage, done } = await searchParams;
   const { invoice, customers, today, siblings, onAccount } = await loadInvoice(id);
   if (!invoice) notFound();
 
@@ -110,6 +112,34 @@ export default async function InvoiceDetailPage({
         </Banner>
       )}
       {onAccountMessage && <Banner tone="info">{onAccountMessage}</Banner>}
+      {done && <Banner tone="info">{done}</Banner>}
+
+      {/* completed invoices (owner, 25 Oct 2026): a settled invoice can leave the
+          active lists, and come back; nothing on it changes either way */}
+      {(invoice.completion || isSettled(invoice)) && (
+        <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--color-line)] bg-white px-4 py-3 text-[13px]">
+          {invoice.completion ? (
+            <span className={isSettled(invoice) ? "text-[var(--color-ink-2)]" : "text-[var(--color-warn-fg)]"}>
+              <strong>Completed</strong> on {day(invoice.completion.at.slice(0, 10))}
+              {invoice.completion.by && ` by ${invoice.completion.by}`}
+              {isSettled(invoice)
+                ? " — out of the active lists, in Completed Invoices."
+                : " — but money is owed on it again, so it is back in the active lists."}
+            </span>
+          ) : (
+            <span className="text-[var(--color-ink-2)]">
+              Fully settled. Mark it completed to move it out of the active lists; its record and history stay as they are.
+            </span>
+          )}
+          <form action={invoice.completion ? restoreActiveAction : markCompletedAction} className="ml-auto">
+            <input type="hidden" name="id" value={invoice.id} />
+            <input type="hidden" name="returnTo" value={ROUTES.invoice(invoice.id)} />
+            <button type="submit" className="btn-ghost btn-sm">
+              {invoice.completion ? "Restore to active" : "Mark as completed"}
+            </button>
+          </form>
+        </div>
+      )}
 
       {/* ------------------------------------------------- the position */}
       <div className="mb-5 grid gap-4 lg:grid-cols-3">

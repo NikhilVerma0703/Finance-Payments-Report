@@ -16,6 +16,7 @@ import Link from "next/link";
 
 import { STATUS_LABELS, STATUS_TONE, type TrackedInvoice, type TrackingStatus } from "@/lib/payments/record";
 import { HOME_CURRENCY } from "@/lib/money";
+import { NO_DUE_DATE, NOT_YET_DUE } from "@/lib/payments/money";
 import type { OnAccountEntry } from "@/lib/payments/onAccount";
 import { dueByWeek, monthToDate, receiptsByMonth, receivedByWeek } from "@/lib/payments/overview";
 import { ROUTES } from "@/lib/routes";
@@ -197,6 +198,7 @@ export function Dashboard({
               </section>
 
               {/* ------------------------------------------- headline figures */}
+              <div className="flex min-w-0 flex-col gap-3">
               <div className="grid content-start gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <Stat label="Total invoice value" value={kpiMoney(k.totalInvoiceValue, cur)} sub={`${k.invoices} invoice(s)`} />
                 <Stat
@@ -246,6 +248,9 @@ export function Dashboard({
                   }
                   tone="accent"
                 />
+              </div>
+              {/* the space under the tiles: what came in month by month (owner, 26 Oct 2026) */}
+              <MonthlyCollection points={months.points} undated={months.undated} mtd={mtd} cur={cur} />
               </div>
             </div>
 
@@ -314,11 +319,16 @@ export function AgeingSummary({
 
         return (
           <section key={k.currency} className="space-y-4">
+            {/* the trends beside the ageing (owner, 26 Oct 2026): what falls due and
+                what came in on the left, the ageing and the biggest balances on the right */}
+            <div className="grid items-start gap-4 xl:grid-cols-2">
+            <div className="flex min-w-0 flex-col gap-4">
             {a.openInvoices > 0 && <DueStrip columns={weeks} currency={k.currency} filters={filters} />}
             {/* what fell due beside what came in (owner, 24 Oct 2026) */}
             {received.some((c) => c.amount > 0.01) && <ReceivedStrip columns={received} currency={k.currency} filters={filters} />}
+            </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+            <div className="flex min-w-0 flex-col gap-4">
               <section className="rounded-2xl border border-[var(--color-line)] bg-white p-5">
                 {a.openInvoices > 0 && (
                   <div className="mb-4">
@@ -359,16 +369,34 @@ export function AgeingSummary({
                         tone="bad"
                       />
                       <div className="hidden w-px self-stretch bg-[var(--color-line)] sm:block" />
-                      <div className="grid flex-1 grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6">
-                        {a.buckets.map((b) => (
-                          <AgeingCard
-                            key={b.label}
-                            label={b.label}
-                            count={b.count}
-                            amount={kpiMoney(b.amount, cur)}
-                            href={drill({ ageing: b.label, currency: k.currency })}
-                            tone={toneFor(b.label)}
-                          />
+                      <div className="flex min-w-0 flex-1 flex-col gap-3">
+                        {/* not yet due, overdue and undated kept apart, each card with its share (owner, 26 Oct 2026) */}
+                        {[
+                          { title: "Not yet due", list: a.buckets.filter((b) => b.label === NOT_YET_DUE) },
+                          { title: "Overdue", list: a.buckets.filter((b) => b.label !== NOT_YET_DUE && b.label !== NO_DUE_DATE) },
+                          { title: "No due date", list: a.buckets.filter((b) => b.label === NO_DUE_DATE) },
+                        ].map((g) => (
+                          <div key={g.title}>
+                            <div className="mb-1 flex items-baseline justify-between text-[10.5px] font-bold uppercase tracking-[0.1em] text-[var(--color-ink-3)]">
+                              <span>{g.title}</span>
+                              <span className="font-semibold normal-case tracking-normal tabular-nums">
+                                {total > 0.01 ? Math.round((g.list.reduce((s, b) => s + b.amount, 0) / total) * 1000) / 10 : 0}% of the balance
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-3">
+                              {g.list.map((b) => (
+                                <AgeingCard
+                                  key={b.label}
+                                  label={b.label}
+                                  count={b.count}
+                                  amount={kpiMoney(b.amount, cur)}
+                                  share={total > 0.01 ? Math.round((b.amount / total) * 1000) / 10 : 0}
+                                  href={drill({ ageing: b.label, currency: k.currency })}
+                                  tone={toneFor(b.label)}
+                                />
+                              ))}
+                            </div>
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -394,6 +422,7 @@ export function AgeingSummary({
               </section>
 
               <TopBalances rows={customers} currency={k.currency} />
+            </div>
             </div>
           </section>
         );
@@ -421,12 +450,15 @@ function AgeingCard({
   label,
   count,
   amount,
+  share,
   href,
   tone,
 }: {
   label: string;
   count: number;
   amount: string;
+  /** Its share of the outstanding balance, %. */
+  share?: number;
   href: string;
   tone: "plain" | "warn" | "bad" | "info" | "ok";
 }) {
@@ -445,7 +477,82 @@ function AgeingCard({
       <div className="mt-1 text-[15px] font-semibold tabular-nums">{amount}</div>
       <div className="mt-0.5 text-[11px] text-[var(--color-ink-3)] group-hover:text-[var(--color-brand-2)]">
         {count} invoice{count === 1 ? "" : "s"}
+        {share !== undefined && <span className="float-right font-semibold tabular-nums text-[var(--color-ink-2)]">{share}%</span>}
       </div>
     </Link>
+  );
+}
+
+/**
+ * Monthly collection performance (owner, 26 Oct 2026): what came in each of
+ * the last twelve months, as bars with their figures; the last full month
+ * against the one before it, and this month so far against the same days of
+ * last month (monthToDate). No collection target is kept anywhere, so none is
+ * drawn — a target line made up here would be a figure nobody set.
+ */
+function MonthlyCollection({
+  points,
+  undated,
+  mtd,
+  cur,
+}: {
+  points: Array<{ month: string; amount: number }>;
+  undated: number;
+  mtd: { now: number; before: number; change: number | null; previousMonth: string };
+  cur: string | null;
+}) {
+  const max = Math.max(...points.map((p) => p.amount), 1);
+  const [prev, last] = points.slice(-3, -1);
+  const growth = prev && last && prev.amount > 0.01 ? Math.round(((last.amount - prev.amount) / prev.amount) * 1000) / 10 : null;
+  const dated = points.some((p) => p.amount > 0.01);
+  return (
+    <section className="rounded-2xl border border-[var(--color-line)] bg-white p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <Eyebrow>Monthly collection performance</Eyebrow>
+        <span className="text-[10.5px] text-[var(--color-ink-3)]">receipts by receipt date · no collection target is set</span>
+      </div>
+      <div className="mt-2 grid gap-3 text-[11px] sm:grid-cols-3">
+        <div>
+          <div className="text-[var(--color-ink-3)]">This month so far</div>
+          <div className="text-[15px] font-semibold tabular-nums">{money(mtd.now, cur)}</div>
+          <div className="text-[var(--color-ink-3)]">
+            {mtd.change === null
+              ? `${monthName(mtd.previousMonth)}: none by this day`
+              : `${mtd.change >= 0 ? "▲" : "▼"} ${Math.abs(mtd.change)}% vs same days of ${monthName(mtd.previousMonth)}`}
+          </div>
+        </div>
+        {last && (
+          <div>
+            <div className="text-[var(--color-ink-3)]">{monthName(last.month)} (last full month)</div>
+            <div className="text-[15px] font-semibold tabular-nums">{money(last.amount, cur)}</div>
+            <div className={growth === null ? "text-[var(--color-ink-3)]" : growth >= 0 ? "text-[var(--color-ok-fg)]" : "text-[var(--color-bad-fg)]"}>
+              {growth === null
+                ? `nothing in ${prev ? monthName(prev.month) : "the month before"} to compare`
+                : `${growth >= 0 ? "▲" : "▼"} ${Math.abs(growth)}% vs ${monthName(prev!.month)}`}
+            </div>
+          </div>
+        )}
+        <div>
+          <div className="text-[var(--color-ink-3)]">Last 12 months</div>
+          <div className="text-[15px] font-semibold tabular-nums">{money(points.reduce((s, p) => s + p.amount, 0), cur)}</div>
+          {undated > 0.01 && <div className="text-[var(--color-warn-fg)]">+ {money(undated, cur)} with no receipt date</div>}
+        </div>
+      </div>
+      {dated ? (
+        <div className="mt-3 flex h-24 items-end gap-1" role="img" aria-label="Receipts by month, last 12 months">
+          {points.map((p, n) => (
+            <div key={p.month} className="flex min-w-0 flex-1 flex-col items-center gap-0.5" title={`${monthName(p.month)}: ${money(p.amount, cur)}`}>
+              <div
+                className={`w-full rounded-t ${n === points.length - 1 ? "bg-[#9cc5c0]" : "bg-[var(--color-accent)]"}`}
+                style={{ height: `${Math.max((p.amount / max) * 80, p.amount > 0.01 ? 2 : 0)}px` }}
+              />
+              <div className="truncate text-[9px] text-[var(--color-ink-3)]">{monthName(p.month).slice(0, 3)}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-[11px] text-[var(--color-ink-3)]">No receipt in the last 12 months carries a date, so there is nothing to chart by month.</p>
+      )}
+    </section>
   );
 }

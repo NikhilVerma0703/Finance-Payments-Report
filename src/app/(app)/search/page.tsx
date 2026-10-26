@@ -6,12 +6,14 @@
  * results use the same detailed table, and an invoice opens to its full record
  * where every field can be edited.
  */
+import { cookies } from "next/headers";
 import Link from "next/link";
 
 import { Filters } from "@/components/tracking/Filters";
-import { MasterTable } from "@/components/tracking/MasterTable";
+import { BulkBar } from "@/components/tracking/BulkBar";
+import { columnsFrom, COLUMNS_COOKIE, MasterTable, withColumns } from "@/components/tracking/MasterTable";
 import { money } from "@/components/tracking/bits";
-import { Empty, PageHead } from "@/components/ui";
+import { Done, Empty, PageHead } from "@/components/ui";
 import { ROUTES } from "@/lib/routes";
 import {
   activeFilters,
@@ -23,6 +25,7 @@ import {
   loadTracking,
   toQuery,
 } from "@/server/payments/query";
+import { markCompletedAction } from "@/server/payments/managementActions";
 
 export const dynamic = "force-dynamic";
 
@@ -31,8 +34,11 @@ export default async function SearchPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const filters = filtersFrom(await searchParams);
+  const sp = await searchParams;
+  const filters = filtersFrom(sp);
   const { invoices, params, options, counts } = await loadTracking();
+  // columns chosen one by one: the URL's, else the ones remembered in this browser
+  const chosen = columnsFrom(sp.col, (await cookies()).get(COLUMNS_COOKIE)?.value);
 
   const visible = filterInvoices(invoices, filters);
   const grouping = isGrouping(filters.group) ? filters.group : "none";
@@ -60,9 +66,11 @@ export default async function SearchPage({
         }
       />
 
+      <Done message={sp.done} />
+
       <Filters
         filters={filters}
-        options={options}
+        options={{ ...options, countries: [...new Set(invoices.map((i) => i.country?.trim() ?? "").filter(Boolean))].sort() }}
         buckets={params.ageingBuckets}
         action={ROUTES.search}
         matched={visible.length}
@@ -112,14 +120,28 @@ export default async function SearchPage({
           </Empty>
         </section>
       ) : (
-        <MasterTable
-          groups={groups}
-          query={query}
-          sort={filters.sort}
-          dir={filters.dir}
-          showHeadings={grouping !== "none"}
-          basePath={ROUTES.search}
-        />
+        <>
+          {/* tick invoices for a bulk action (owner, 25 Oct 2026) */}
+          <BulkBar
+            formId="pt-bulk"
+            action={markCompletedAction}
+            actionLabel="Mark as completed"
+            hint="Fully settled invoices move to Completed invoices; any other ticked one is left as it is"
+            exportHref={ROUTES.exportView}
+            returnTo={`${ROUTES.search}?${withColumns(query, chosen)}`}
+          />
+          <MasterTable
+            groups={groups}
+            query={withColumns(query, chosen)}
+            sort={filters.sort}
+            dir={filters.dir}
+            showHeadings={grouping !== "none"}
+            basePath={ROUTES.search}
+            chosen={chosen}
+            select="pt-bulk"
+            chooser
+          />
+        </>
       )}
     </>
   );

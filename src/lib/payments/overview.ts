@@ -108,6 +108,20 @@ export interface WeekColumn {
   invoices: number;
 }
 
+/**
+ * What an invoice still owes and when each part of it falls due: portion by
+ * portion where the terms have several — 30% now and 70% in ninety days are
+ * two different dates — and the whole balance on its date where a due date was
+ * entered by hand. Nothing for an invoice that owes nothing.
+ */
+export function owingParts(i: TrackedInvoice): Array<{ due: string | null; amount: number }> {
+  const owing = i.money.calculatedOutstanding ?? 0;
+  if (owing <= 0.01) return [];
+  return i.schedule.dueDateSource === "entered" || i.schedule.milestones.length === 0
+    ? [{ due: i.schedule.dueDate, amount: owing }]
+    : i.schedule.milestones.filter((ms) => ms.outstanding > 0.01).map((ms) => ({ due: ms.dueDate, amount: ms.outstanding }));
+}
+
 /** The Monday of the week a date falls in. */
 export function weekStart(iso: string): string {
   const dow = new Date(`${iso}T00:00:00Z`).getUTCDay(); // 0 = Sunday
@@ -163,16 +177,8 @@ export function dueByWeek(
   };
 
   for (const i of invoices) {
-    const owing = i.money.calculatedOutstanding ?? 0;
-    if (owing <= 0.01) continue;
-    const parts: Array<{ due: string | null; amount: number }> =
-      i.schedule.dueDateSource === "entered" || i.schedule.milestones.length === 0
-        ? [{ due: i.schedule.dueDate, amount: owing }]
-        : i.schedule.milestones
-            .filter((ms) => ms.outstanding > 0.01)
-            .map((ms) => ({ due: ms.dueDate, amount: ms.outstanding }));
     const touched = new Set<string>();
-    for (const p of parts) {
+    for (const p of owingParts(i)) {
       const col = columnFor(p.due);
       col.amount = round2(col.amount + p.amount);
       if (!touched.has(col.key)) {

@@ -23,11 +23,14 @@ import Link from "next/link";
 import { CustomerSummary, DEFAULT_SUMMARY_SORT, isSummarySort } from "@/components/tracking/CustomerSummary";
 import { AgeingSummary, Dashboard } from "@/components/tracking/Dashboard";
 import { AttentionStrip, asAtTime, OverviewHead, type AttentionItem } from "@/components/tracking/Overview";
+import { DataQualityAlerts, PriorityFollowUps, UpcomingSchedule } from "@/components/tracking/Management";
 import { AllInvoices, PendingSwitch } from "@/components/tracking/PendingView";
 import { fillCurrenciesAction } from "@/server/payments/currencyActions";
 import { Banner } from "@/components/ui";
 import { formatMoney } from "@/lib/money";
+import { dataQuality, isScheduleWindow, priorityFollowUps, upcomingSchedule, type ScheduleWindow } from "@/lib/payments/management";
 import { ageingLabels } from "@/lib/payments/money";
+import { addDays } from "@/lib/text";
 import { ROUTES } from "@/lib/routes";
 import {
   activeFilters,
@@ -58,7 +61,11 @@ export default async function DashboardPage({
   // newest payment first unless another order is picked (owner, 24 Oct 2026)
   const csort = isSummarySort(sp.csort) ? sp.csort : DEFAULT_SUMMARY_SORT;
   const cq = typeof sp.cq === "string" ? sp.cq : "";
-  const { invoices, onAccount: allOnAccount, params, today, counts, options } = await loadTracking();
+  const { invoices, onAccount: allOnAccount, params, today, counts, options, followUps, clientCurrencies } = await loadTracking();
+  // the upcoming schedule's window, its own key beside the filters
+  const sched: ScheduleWindow = isScheduleWindow(sp.sched) ? (Number(sp.sched) as ScheduleWindow) : 15;
+  // what a save on this page did (the follow-up form)
+  const done = typeof sp.done === "string" ? sp.done : null;
 
   const showAll = showsAll(sp.show);
   // every invoice the filters let through, and of those the ones still owing
@@ -82,6 +89,11 @@ export default async function DashboardPage({
   const exportQuery = toQuery(filters, showAll ? {} : { open: "1" });
   const narrowed = activeFilters(filters);
   const time = asAtTime();
+  const keepView: Record<string, string> = showAll ? { show: "all" } : {};
+  const searchOn = (extra: Record<string, string>) => `${ROUTES.search}?${toQuery({ ...filters, sort: undefined, dir: undefined }, extra)}`;
+  // where a follow-up save comes back to: this view, without the last message
+  const hereQuery = toQuery(filters, { ...keepView, ...(sp.sched ? { sched: String(sched) } : {}) });
+  const here = `${ROUTES.dashboard}${hereQuery ? `?${hereQuery}` : ""}#follow-ups`;
   const month = today.slice(0, 7);
 
   return (
@@ -217,6 +229,29 @@ export default async function DashboardPage({
             customers={customers}
             today={today}
           />
+
+          <div className="-mt-3 mb-6 text-right text-[12px]">
+            <Link href={ROUTES.ageing} className="link">
+              Full ageing analysis — by customer, by status, customer payment performance →
+            </Link>
+          </div>
+
+          {/* the working lists (owner, 26 Oct 2026): what falls due next, who to
+              chase first and what the records are missing */}
+          <UpcomingSchedule
+            schedule={upcomingSchedule(visible, today)}
+            window={sched}
+            windowHref={(d) => `${ROUTES.dashboard}?${toQuery(filters, { ...keepView, sched: String(d) })}#upcoming`}
+            dueHref={(d) => searchOn({ dateField: "due", from: today, to: addDays(today, d), open: "1" })}
+          />
+
+          {done && (
+            <Banner tone={/saved/i.test(done) ? "ok" : "info"}>{done}</Banner>
+          )}
+          <div className="mb-6 grid items-start gap-4 xl:grid-cols-2">
+            <PriorityFollowUps rows={priorityFollowUps(visible, followUps, inView)} returnTo={here} />
+            <DataQualityAlerts alerts={dataQuality(inView, clientCurrencies)} missingHref={(key) => searchOn({ missing: key, open: "1" })} />
+          </div>
 
           {defaulted > 0 && (
             <Banner tone="info">

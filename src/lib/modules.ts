@@ -1,5 +1,5 @@
 /**
- * The seven sections down the left-hand side.
+ * The eight sections down the left-hand side.
  *
  * Flat rather than grouped: the whole application is one job — following
  * customer payments — so every screen is one click from every other.
@@ -26,6 +26,12 @@ export const NAV: NavItem[] = [
     label: "Master Table",
     key: "master",
     hint: "Every invoice grouped by customer; a customer's name opens its payments to adjust",
+  },
+  {
+    href: ROUTES.completed,
+    label: "Completed Invoices",
+    key: "completed",
+    hint: "Fully settled invoices marked completed, with their history; restore any to the active lists",
   },
   {
     href: ROUTES.search,

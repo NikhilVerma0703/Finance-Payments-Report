@@ -424,7 +424,7 @@ export function DueStrip({
         week for the invoices due in it.
       </p>
 
-      <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-8 xl:grid-cols-15">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(3.75rem,1fr))] gap-1.5">
         {columns.map((c) => {
           const ratio = c.amount / max;
           const has = c.amount > 0.01;
@@ -548,7 +548,7 @@ export function ReceivedStrip({
         invoices too, and money booked on account. Click a week for the invoices paid in it.
       </p>
 
-      <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-8 xl:grid-cols-15">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(3.75rem,1fr))] gap-1.5">
         {shown.map((c) => {
           const ratio = c.amount / max;
           const has = c.amount > 0.01;

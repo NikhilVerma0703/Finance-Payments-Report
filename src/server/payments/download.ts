@@ -12,8 +12,14 @@ import { buildInvoicesCsv, buildReportWorkbook, safeFileName } from "@/server/pa
 
 export async function download(params: URLSearchParams, title: string, prefix: string) {
   const filters = filtersFrom(params);
-  const { invoices, today, params: tracking } = await loadTracking();
-  const rows = filterInvoices(invoices, filters);
+  const { invoices, completed, today, params: tracking } = await loadTracking();
+  const visible = filterInvoices(invoices, filters);
+  // the invoices ticked in a table (?id=…, "Export selected"), wherever they
+  // are — a completed one included — in the table's order
+  const ticked = new Set(params.getAll("id"));
+  const rows = ticked.size
+    ? [...new Map([...visible, ...invoices, ...completed].map((i) => [i.id, i])).values()].filter((i) => ticked.has(i.id))
+    : visible;
 
   const scope = filters.customer ? `_${safeFileName(filters.customer)}` : "";
   const name = `${prefix}${scope}_${today.replace(/-/g, "")}`;

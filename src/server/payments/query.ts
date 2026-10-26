@@ -14,6 +14,8 @@ import { cache } from "react";
 import { prisma } from "@/lib/db";
 import { ageingSummary, type AgeingSummary } from "@/lib/payments/ageing";
 import { clientKey, matchErpClient } from "@/lib/payments/erpClients";
+import { splitCompleted, type Completion } from "@/lib/payments/completed";
+import { isFollowUpStatus, type ClientCurrencies, type FollowUp } from "@/lib/payments/management";
 import { ageingLabels } from "@/lib/payments/money";
 import {
   buildOnAccount,
@@ -126,7 +128,15 @@ export interface TrackingKpis {
 }
 
 export interface TrackingView {
+  /** The active invoices: every one but those marked completed. */
   invoices: TrackedInvoice[];
+  /** The completed ones, settled and moved out of the active lists — the
+   *  Completed invoices section's (lib/payments/completed.ts). */
+  completed: TrackedInvoice[];
+  /** Each customer's follow-up, by customer id (pt_follow_ups). */
+  followUps: Map<string, FollowUp>;
+  /** The ERP client list's default currencies, by name key, for the data-quality check. */
+  clientCurrencies: ClientCurrencies;
   /** Every customer-level payment and note, with what is left to attribute. */
   onAccount: OnAccountEntry[];
   customers: CustomerSummary[];
@@ -174,7 +184,7 @@ async function readTracking(): Promise<TrackingView> {
   const today = todayIso();
   const [params, rules] = await Promise.all([loadParams(), loadRules()]);
 
-  const [rows, imports, entries, erp] = await Promise.all([
+  const [rows, imports, entries, erp, completions, followUps] = await Promise.all([
     prisma.ptInvoice.findMany({
       include: {
         customer: true,
@@ -207,6 +217,8 @@ async function readTracking(): Promise<TrackingView> {
       orderBy: [{ entryDate: "desc" }, { createdAt: "desc" }],
     }),
     loadErpClients(),
+    loadCompletions(),
+    loadFollowUps(),
   ]);
 
   // a customer's currency: its own, else the ERP client list's default for it
@@ -217,7 +229,7 @@ async function readTracking(): Promise<TrackingView> {
     return hit?.currency ? { currency: hit.currency, source: "erp" as const } : { currency: null, source: null };
   };
 
-  const invoices = rows.map((r) => {
+  const all = rows.map((r) => {
     const fallback = currencyOf(r.customer);
     return buildTrackedInvoice(
       {
@@ -273,6 +285,9 @@ async function readTracking(): Promise<TrackingView> {
     );
   });
 
+  // completed invoices leave every active screen; everything below is over the rest
+  const { active: invoices, completed } = splitCompleted(all, completions);
+
   const onAccount = entries.map((e) =>
     buildOnAccount({
       id: e.id,
@@ -294,8 +309,15 @@ async function readTracking(): Promise<TrackingView> {
     }),
   );
 
+  const clientCurrencies = new Map(
+    [...erp.values()].filter((c) => c.currency).map((c) => [c.nameKey, { name: c.name, currency: c.currency! }]),
+  );
+
   return {
     invoices,
+    completed,
+    followUps,
+    clientCurrencies,
     onAccount,
     customers: summarise(invoices, onAccount),
     kpis: kpisFrom(invoices, params, onAccount),
@@ -323,6 +345,29 @@ async function readTracking(): Promise<TrackingView> {
     },
     imports: imports.map((i) => ({ ...i, asOn: d(i.asOn) })),
   };
+}
+
+/** The completed marks, by invoice id. */
+async function loadCompletions(): Promise<Map<string, Completion>> {
+  const rows = await prisma.ptCompleted.findMany();
+  return new Map(rows.map((r) => [r.invoiceId, { at: r.completedAt.toISOString(), by: r.completedByName, note: r.note }]));
+}
+
+/** Every recorded follow-up, by customer id. */
+async function loadFollowUps(): Promise<Map<string, FollowUp>> {
+  const rows = await prisma.ptFollowUp.findMany();
+  return new Map(
+    rows.map((r) => [
+      r.customerId,
+      {
+        status: isFollowUpStatus(r.status) ? r.status : "NOT_STARTED",
+        nextAction: r.nextAction,
+        nextDate: d(r.nextDate),
+        by: r.updatedByName,
+        at: r.updatedAt.toISOString(),
+      },
+    ]),
+  );
 }
 
 /** The copy of the ERP's client list, by match key. */
@@ -633,7 +678,34 @@ export interface TrackingFilters {
   sort?: string;
   dir?: string;
   group?: string;
+  // ---- advanced filters (owner, 25 Oct 2026: "Add appropriate filtering
+  //      options to relevant tables so users can easily filter invoices and
+  //      records by different criteria") — each a bound, a choice or a gap
+  /** Outstanding balance between, in the invoice's own currency. */
+  omin?: string;
+  omax?: string;
+  /** Invoice value between. */
+  vmin?: string;
+  vmax?: string;
+  /** Days overdue between (an invoice not yet due counts its days to go as below 0). */
+  dmin?: string;
+  dmax?: string;
+  country?: string;
+  /** EXCEL (from an uploaded sheet) or MANUAL (entered by hand). */
+  src?: string;
+  /** A field the invoice is missing — see MISSING_FIELDS. */
+  missing?: string;
 }
+
+/** What "Missing information" can look for. */
+export const MISSING_FIELDS = {
+  bl: "BL date",
+  terms: "Payment terms",
+  due: "Due date",
+  currency: "Currency",
+  rate: "Exchange rate",
+  po: "PO number",
+} as const;
 
 /**
  * What "Date Range On" can filter by.
@@ -674,6 +746,7 @@ export const FILTER_KEYS = [
   "q", "inv", "customer", "currency", "status", "ageing", "po", "term",
   "from", "to", "dateField", "attention", "nilReceived", "verify", "open",
   "sort", "dir", "group",
+  "omin", "omax", "vmin", "vmax", "dmin", "dmax", "country", "src", "missing",
 ] as const;
 
 /** Filters read from a URL, keeping only the known keys and non-blank values. */
@@ -714,6 +787,15 @@ const FILTER_LABELS: Record<string, string> = {
   attention: "Needs attention",
   nilReceived: "Nothing received",
   verify: "Requires verification",
+  omin: "Outstanding from",
+  omax: "Outstanding to",
+  vmin: "Invoice value from",
+  vmax: "Invoice value to",
+  dmin: "Days overdue from",
+  dmax: "Days overdue to",
+  country: "Country",
+  src: "Source",
+  missing: "Missing",
 };
 
 /** The filters in force, as a reader would say them: "Customer: Terry Stone". */
@@ -722,6 +804,8 @@ export function describeFilters(f: TrackingFilters): string[] {
     const label = FILTER_LABELS[k] ?? k;
     if (k === "dateField") return `${label}: ${DATE_FIELDS[v as DateField] ?? v}`;
     if (k === "status") return `${label}: ${STATUS_LABELS[v as TrackingStatus] ?? v}`;
+    if (k === "src") return `${label}: ${v === "EXCEL" ? "uploaded sheet" : "entered by hand"}`;
+    if (k === "missing") return `${label}: ${Object.hasOwn(MISSING_FIELDS, v) ? MISSING_FIELDS[v as keyof typeof MISSING_FIELDS] : v}`;
     if (v === "1") return label;
     return `${label}: ${v}`;
   });
@@ -777,6 +861,7 @@ export function filterInvoices(rows: TrackedInvoice[], f: TrackingFilters): Trac
     if (f.attention === "1" && !i.needsAttention) return false;
     if (f.nilReceived === "1" && i.money.totalReceived > 0.01) return false;
     if (f.verify === "1" && i.status !== "REQUIRES_VERIFICATION") return false;
+    if (!advancedMatch(i, f)) return false;
 
     if (inv && !(i.invoiceNo ?? "").toLowerCase().includes(inv)) return false;
 
@@ -800,6 +885,41 @@ export function filterInvoices(rows: TrackedInvoice[], f: TrackingFilters): Trac
   });
 
   return sortInvoices(out, f);
+}
+
+/** A bound typed in a filter box: a number, or nothing. */
+function bound(v: string | undefined): number | null {
+  if (v === undefined || v.trim() === "") return null;
+  const n = Number(v.replace(/[,\s]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Whether an invoice passes the advanced filters (TrackingFilters omin … missing). */
+export function advancedMatch(i: TrackedInvoice, f: TrackingFilters): boolean {
+  const within = (value: number | null, lo: string | undefined, hi: string | undefined) => {
+    const [a, b] = [bound(lo), bound(hi)];
+    if (a === null && b === null) return true;
+    if (value === null) return false;
+    return (a === null || value >= a - 0.005) && (b === null || value <= b + 0.005);
+  };
+  if (!within(i.money.calculatedOutstanding, f.omin, f.omax)) return false;
+  if (!within(i.customerInvoiceValue, f.vmin, f.vmax)) return false;
+  if (!within(i.overdueDays, f.dmin, f.dmax)) return false;
+  if (f.country && (i.country ?? "").trim().toLowerCase() !== f.country.trim().toLowerCase()) return false;
+  if (f.src === "EXCEL" && i.source !== "EXCEL") return false;
+  if (f.src === "MANUAL" && i.source === "EXCEL") return false;
+  if (f.missing) {
+    const gap: Record<string, boolean> = {
+      bl: !i.blDate,
+      terms: !i.paymentTerms,
+      due: !i.schedule.dueDate,
+      currency: !i.currency,
+      rate: i.exchangeRate === null,
+      po: !i.poNo,
+    };
+    if (gap[f.missing] === false) return false;
+  }
+  return true;
 }
 
 const SORTABLE = {
@@ -990,11 +1110,14 @@ function monthLabel(ym: string): string {
 export async function loadCustomer(id: string) {
   const view = await loadTracking();
   const invoices = view.invoices.filter((i) => i.customerId === id);
+  /** Its completed invoices, out of the lists above. */
+  const completed = view.completed.filter((i) => i.customerId === id);
   const onAccount = view.onAccount.filter((e) => e.customerId === id);
   const customer = await prisma.ptCustomer.findUnique({ where: { id } });
   return {
     customer,
     invoices,
+    completed,
     onAccount,
     erp: customer ? await erpClientFor(customer.name) : null,
     summary: summarise(invoices, onAccount),
@@ -1007,7 +1130,8 @@ export async function loadCustomer(id: string) {
 /** One invoice, with its term explained in full. */
 export async function loadInvoice(id: string) {
   const view = await loadTracking();
-  const invoice = view.invoices.find((i) => i.id === id) ?? null;
+  // a completed invoice opens too, with its completion on it
+  const invoice = view.invoices.find((i) => i.id === id) ?? view.completed.find((i) => i.id === id) ?? null;
   const customers = await prisma.ptCustomer.findMany({ orderBy: { name: "asc" } });
   return {
     invoice,

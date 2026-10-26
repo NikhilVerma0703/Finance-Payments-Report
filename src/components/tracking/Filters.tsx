@@ -17,6 +17,7 @@ import {
   describeFilters,
   GROUPINGS,
   isDateField,
+  MISSING_FIELDS,
   type TrackingFilters,
 } from "@/server/payments/query";
 
@@ -61,11 +62,33 @@ function Check({ name, label, on, hint }: { name: string; label: string; on: boo
   );
 }
 
+/** A from–to pair of number boxes: `${name}min` and `${name}max`. */
+function Range({ name, label, lo, hi, unit }: { name: string; label: string; lo: string | undefined; hi: string | undefined; unit?: string }) {
+  return (
+    <fieldset className="w-full sm:w-56">
+      <legend className="field-label">
+        {label}
+        {unit && <span className="font-normal text-[var(--color-ink-3)]"> ({unit})</span>}
+      </legend>
+      <div className="flex items-center gap-1.5">
+        <input name={`${name}min`} type="number" step="any" defaultValue={lo ?? ""} placeholder="from" aria-label={`${label} from`} className="input" />
+        <span className="text-[var(--color-ink-3)]">–</span>
+        <input name={`${name}max`} type="number" step="any" defaultValue={hi ?? ""} placeholder="to" aria-label={`${label} to`} className="input" />
+      </div>
+    </fieldset>
+  );
+}
+
+/** The advanced filters' keys, to say how many are in force. */
+const ADVANCED: ReadonlyArray<keyof TrackingFilters> = ["omin", "omax", "vmin", "vmax", "dmin", "dmax", "country", "src", "missing"];
+
 export interface FilterOptions {
   customers: string[];
   currencies: string[];
   pos: string[];
   terms: string[];
+  /** The countries on record, for the advanced filters. */
+  countries?: string[];
   invoiceNos?: string[];
 }
 
@@ -90,6 +113,7 @@ export function Filters({
   const field = isDateField(filters.dateField) ? filters.dateField : "invoice";
   const ageing = [...ageingOrder(buckets), SETTLED];
   const applied = activeFilters(filters);
+  const advanced = ADVANCED.filter((k) => filters[k]).length;
 
   return (
     <section className="card mb-4">
@@ -182,6 +206,31 @@ export function Filters({
             />
           )}
         </div>
+
+        {variant === "search" && (
+          // more ways in, folded until wanted (owner, 25 Oct 2026); open while any is in force
+          <details open={advanced > 0} className="group rounded-xl border border-[var(--color-line)] bg-[var(--color-shell)] px-3 py-2">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-[var(--color-ink-2)]">
+              <span className="transition-transform group-open:rotate-90" aria-hidden>
+                ▸
+              </span>
+              Advanced filters
+              {advanced > 0 && (
+                <span className="rounded-full bg-[var(--color-info-bg)] px-2 py-0.5 normal-case tracking-normal text-[var(--color-info-fg)]">
+                  {advanced} in force
+                </span>
+              )}
+            </summary>
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <Range name="o" label="Outstanding" lo={filters.omin} hi={filters.omax} unit="invoice currency" />
+              <Range name="v" label="Invoice value" lo={filters.vmin} hi={filters.vmax} unit="invoice currency" />
+              <Range name="d" label="Days overdue" lo={filters.dmin} hi={filters.dmax} />
+              <Select name="country" label="Country" value={filters.country} options={(options.countries ?? []).map((c) => [c, c])} />
+              <Select name="src" label="Source" value={filters.src} options={[["EXCEL", "Uploaded sheet"], ["MANUAL", "Entered by hand"]]} />
+              <Select name="missing" label="Missing information" width="w-48" value={filters.missing} options={Object.entries(MISSING_FIELDS)} />
+            </div>
+          </details>
+        )}
 
         <div className="flex flex-wrap items-end gap-3">
           <div className="w-44">

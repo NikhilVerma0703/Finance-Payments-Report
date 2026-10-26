@@ -40,6 +40,8 @@ model PtCustomer {
   invoices  PtInvoice[]
   edits     PtFieldEdit[]
   onAccount PtOnAccount[]
+  /// Where chasing its overdue money stands (PtFollowUp).
+  followUp  PtFollowUp?
 
   @@index([name])
   @@map("pt_customers")
@@ -102,9 +104,11 @@ model PtInvoice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  receipts PtReceipt[]
-  notes    PtNote[]
-  edits    PtFieldEdit[]
+  receipts   PtReceipt[]
+  notes      PtNote[]
+  edits      PtFieldEdit[]
+  /// Marked completed: settled and moved out of the active lists (PtCompleted).
+  completion PtCompleted?
 
   @@index([customerId])
   @@index([invoiceNo])
@@ -342,4 +346,35 @@ model PtSetting {
   updatedAt DateTime @updatedAt
 
   @@map("pt_settings")
+}
+
+/// A fully settled invoice somebody marked completed (owner, 25 Oct 2026: "mark
+/// fully settled invoices as completed and move them out of the active
+/// outstanding list without permanently deleting their records"). The invoice
+/// and its history are untouched; deleting this row puts it back in the active
+/// lists. One row per invoice.
+model PtCompleted {
+  invoiceId       String    @id
+  invoice         PtInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  completedAt     DateTime  @default(now())
+  completedByName String?
+  note            String?
+
+  @@map("pt_completed")
+}
+
+/// Where chasing a customer's overdue money stands (owner, 26 Oct 2026: "Allow
+/// authorized users to update follow-up status and next action"). One row per
+/// customer; every change is in the customer's correction history.
+model PtFollowUp {
+  customerId    String     @id
+  customer      PtCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  /// NOT_STARTED | CONTACTED | PROMISED | DISPUTED | ESCALATED | RESOLVED
+  status        String     @default("NOT_STARTED")
+  nextAction    String?
+  nextDate      DateTime?
+  updatedByName String?
+  updatedAt     DateTime   @updatedAt
+
+  @@map("pt_follow_ups")
 }

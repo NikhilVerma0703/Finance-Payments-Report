@@ -43,6 +43,14 @@ export function PageHead({
   );
 }
 
+/** What the last action on this page did (`?done=` from a redirect). */
+export function Done({ message }: { message: string | string[] | undefined }) {
+  const text = Array.isArray(message) ? message[0] : message;
+  if (!text) return null;
+  const refused = /^(tick|none|nothing|pick|no |that |the next)/i.test(text);
+  return <Banner tone={refused ? "warn" : "ok"}>{text}</Banner>;
+}
+
 export function Empty({ children }: { children: React.ReactNode }) {
   return <div className="p-10 text-center text-[var(--color-ink-3)]">{children}</div>;
 }

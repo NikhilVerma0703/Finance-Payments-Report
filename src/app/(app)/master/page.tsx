@@ -17,11 +17,14 @@
  * each is missing. The filters, sort and grouping are the URL, as on the
  * dashboard and Search Invoices, and the export carries them.
  */
+import { cookies } from "next/headers";
 import Link from "next/link";
 
-import { MasterTable } from "@/components/tracking/MasterTable";
+import { BulkBar } from "@/components/tracking/BulkBar";
+import { Filters } from "@/components/tracking/Filters";
+import { columnsFrom, COLUMNS_COOKIE, MasterTable, withColumns } from "@/components/tracking/MasterTable";
 import { AllInvoices, PendingSwitch } from "@/components/tracking/PendingView";
-import { Empty } from "@/components/ui";
+import { Done, Empty } from "@/components/ui";
 import { ROUTES } from "@/lib/routes";
 import {
   activeFilters,
@@ -35,6 +38,7 @@ import {
   showsAll,
   toQuery,
 } from "@/server/payments/query";
+import { markCompletedAction } from "@/server/payments/managementActions";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +50,9 @@ export default async function MasterTablePage({
   const sp = await searchParams;
   const filters = filtersFrom(sp);
   const showAll = showsAll(sp.show);
-  const { invoices, counts } = await loadTracking();
+  const { invoices, completed, counts, options, params } = await loadTracking();
+  // columns chosen one by one: the URL's, else the ones remembered in this browser
+  const chosen = columnsFrom(sp.col, (await cookies()).get(COLUMNS_COOKIE)?.value);
 
   // every invoice the filters let through, and of those the ones still owing
   const inView = filterInvoices(invoices, filters);
@@ -56,7 +62,7 @@ export default async function MasterTablePage({
   const groups = groupInvoices(visible, grouping);
   const query = toQuery(filters);
   // the table's own links keep the view; the export takes what is shown
-  const tableQuery = toQuery(filters, showAll ? { show: "all" } : {});
+  const tableQuery = withColumns(toQuery(filters, showAll ? { show: "all" } : {}), chosen);
   const exportQuery = toQuery(filters, showAll ? {} : { open: "1" });
   const narrowed = activeFilters(filters);
   const customers = new Set(visible.map((i) => i.customerId ?? "~none")).size;
@@ -82,6 +88,11 @@ export default async function MasterTablePage({
             <Link href={`${ROUTES.search}${query ? `?${query}` : ""}`} className="btn-ghost btn-sm">
               Search invoices
             </Link>
+            {completed.length > 0 && (
+              <Link href={ROUTES.completed} className="btn-ghost btn-sm">
+                Completed invoices · {completed.length}
+              </Link>
+            )}
             <Link href={`${ROUTES.exportView}?${exportQuery}`} className="btn btn-sm">
               Export this view
             </Link>
@@ -113,6 +124,26 @@ export default async function MasterTablePage({
             allHref={`${ROUTES.masterTable}?${toQuery(filters, { show: "all" })}`}
           />
 
+          <Done message={sp.done} />
+
+          {/* the filters, here too (owner, 25 Oct 2026), folded until wanted */}
+          <details open={narrowed.length > 0} className="group mb-2">
+            <summary className="mb-2 flex cursor-pointer list-none items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-[var(--color-ink-2)]">
+              <span className="transition-transform group-open:rotate-90" aria-hidden>
+                ▸
+              </span>
+              Filter this table
+            </summary>
+            <Filters
+              filters={filters}
+              options={{ ...options, countries: [...new Set(invoices.map((i) => i.country?.trim() ?? "").filter(Boolean))].sort() }}
+              buckets={params.ageingBuckets}
+              action={ROUTES.masterTable}
+              matched={visible.length}
+              total={counts.total}
+            />
+          </details>
+
           {narrowed.length > 0 && (
             <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[#c6dcf3] bg-[var(--color-info-bg)] px-3 py-2 text-[12px]">
               <span className="font-semibold text-[var(--color-info-fg)]">
@@ -139,14 +170,28 @@ export default async function MasterTablePage({
               </Empty>
             </section>
           ) : (
-            <MasterTable
-              groups={groups}
-              query={tableQuery}
-              sort={filters.sort}
-              dir={filters.dir}
-              showHeadings={grouping !== "none"}
-              basePath={ROUTES.masterTable}
-            />
+            <>
+              {/* tick invoices for a bulk action (owner, 25 Oct 2026) */}
+              <BulkBar
+                formId="pt-bulk"
+                action={markCompletedAction}
+                actionLabel="Mark as completed"
+                hint="Fully settled invoices move to Completed invoices; any other ticked one is left as it is"
+                exportHref={ROUTES.exportView}
+                returnTo={`${ROUTES.masterTable}?${tableQuery}`}
+              />
+              <MasterTable
+                groups={groups}
+                query={tableQuery}
+                sort={filters.sort}
+                dir={filters.dir}
+                showHeadings={grouping !== "none"}
+                basePath={ROUTES.masterTable}
+                chosen={chosen}
+                select="pt-bulk"
+                chooser
+              />
+            </>
           )}
 
           {/* every invoice, cleared ones too, folded until asked for */}

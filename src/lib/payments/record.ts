@@ -9,6 +9,7 @@
  * request. Everything the section claims about an invoice can therefore be
  * checked without either.
  */
+import type { Completion } from "./completed";
 import { formatMoney } from "../money";
 import { addDays, daysBetween, round2, todayIso } from "../text";
 import {
@@ -172,6 +173,10 @@ export interface TrackedInvoice extends TrackedInvoiceInput {
 
   /** Which fields are empty, so a detail screen can say what to fill in. */
   missingFields: string[];
+
+  /** Marked completed (pt_completed), when and by whom — set by the loader,
+   *  not worked out here (completed.ts splitCompleted). */
+  completion?: Completion | null;
 }
 
 export interface TrackingParams {
