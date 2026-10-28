@@ -27,6 +27,15 @@
  *   - **a second block** of the customer's own figures is read for comparison
  *     and reported, not merged.
  *
+ *   - **an outstanding statement** — the office's own ledger of every
+ *     customer's invoices, receipts side by side (owner, 28 Oct 2026: "make
+ *     upload accept these excels too — multiple customer multiple inv multiple
+ *     receipts") — is imported customer by customer in one upload
+ *     (importStatement). Each receipt there is a receipt of its own, with its
+ *     date, rate, bank and IRM; a customer is matched by any spelling of its
+ *     name the statement uses; and since the office numbers its invoices
+ *     across all customers, an invoice is found by its number wherever it is.
+ *
  * Nothing is invented: no due date is calculated here, no payment term is
  * inferred, no currency is assumed, and no printed total is trusted.
  */
@@ -36,11 +45,14 @@ import { createHash } from "node:crypto";
 
 import { prisma } from "@/lib/db";
 import { toJson } from "@/lib/json";
+import { clientKey } from "@/lib/payments/erpClients";
 import { readPaymentSheet, type SheetBlock, type SheetRead, type SheetRow } from "@/lib/payments/sheetReader";
 import { readTerm, type TermRule } from "@/lib/payments/terms";
 import { loadRules } from "@/server/payments/settings";
 
 const SHEET_SOURCE = "customer payment sheet";
+/** The mark on a receipt an outstanding statement brought in. */
+const STATEMENT_SOURCE = "outstanding statement";
 
 export interface RowChange {
   invoiceNo: string;
@@ -169,6 +181,9 @@ export async function importPaymentSheet(
       warnings: reads.flatMap((r) => r.warnings),
     });
   }
+
+  // an outstanding statement: every customer in it, in one upload
+  if (usable[0].statement) return importStatement(usable.filter((r) => r.statement), buffer, fileName, hash, opts);
 
   const read = usable[0];
   const ours = read.blocks.find((b) => b.kind === "OURS") ?? read.blocks[0];
@@ -378,11 +393,26 @@ async function upsertInvoice(
   customerId: string | null,
   result: ImportResult,
 ): Promise<"created" | "updated" | "unchanged"> {
-  const existing = row.invoiceNo
+  let existing = row.invoiceNo
     ? await prisma.ptInvoice.findFirst({
         where: { invoiceNo: row.invoiceNo, ...(customerId ? { customerId } : {}) },
       })
     : null;
+  // the office numbers its invoices across every customer: an invoice already
+  // here under another customer's name is that invoice, not a new one
+  if (!existing && read.statement && row.invoiceNo) {
+    const elsewhere = await prisma.ptInvoice.findMany({
+      where: { invoiceNo: row.invoiceNo },
+      include: { customer: { select: { name: true } } },
+    });
+    if (elsewhere.length === 1) {
+      existing = elsewhere[0];
+      result.warnings.push(
+        `${row.invoiceNo}: kept under ${elsewhere[0].customer?.name ?? "no customer"}, where it already was — the statement ` +
+          `puts it under ${read.customerName ?? "no customer"}. Move it on the invoice if the statement is right.`,
+      );
+    }
+  }
 
   const incoming: Record<string, unknown> = {
     invoiceNo: row.invoiceNo,
@@ -478,6 +508,7 @@ async function syncSheetReceipt(
   result: ImportResult,
   label: string,
 ): Promise<boolean> {
+  if (row.receipts) return syncStatementReceipts(invoiceId, row, read, result, label);
   const existing = await prisma.ptReceipt.findMany({
     where: { invoiceId },
     orderBy: { seq: "asc" },
@@ -535,6 +566,81 @@ async function syncSheetReceipt(
   return true;
 }
 
+/**
+ * A statement's receipts, each its own: the date, the amount, the rate, the
+ * bank and the IRM, in the order of its receipt bands.
+ *
+ * The statement is the office's own books, so it is the better record than a
+ * customer sheet's one cumulative figure: a receipt either brought in replaces
+ * the other's. A receipt somebody typed by hand is left alone, and where the
+ * two disagree the difference is reported. Receipts are updated in place, one
+ * band to one receipt, so an unchanged statement changes nothing.
+ */
+async function syncStatementReceipts(
+  invoiceId: string,
+  row: SheetRow,
+  read: SheetRead,
+  result: ImportResult,
+  label: string,
+): Promise<boolean> {
+  const existing = await prisma.ptReceipt.findMany({ where: { invoiceId }, orderBy: { seq: "asc" } });
+  const fromSheets = (r: { bankRef: string | null }) => {
+    const ref = r.bankRef ?? "";
+    return ref.startsWith(SHEET_SOURCE) || ref.startsWith(STATEMENT_SOURCE);
+  };
+  const mine = existing.filter(fromSheets);
+  const typed = existing.filter((r) => !fromSheets(r));
+  const wanted = row.receipts ?? [];
+  const total = round2(wanted.reduce((s, x) => s + x.amount, 0));
+
+  if (typed.length) {
+    const entered = round2(typed.reduce((s, r) => s + Number(r.amountFcy ?? 0), 0));
+    if (Math.abs(entered - total) > 0.01) {
+      result.warnings.push(
+        `${label}: the statement lists ${total.toFixed(2)} received in ${wanted.length} receipt(s), but ${typed.length} ` +
+          `receipt(s) entered here total ${entered.toFixed(2)}. The entered receipts were kept.`,
+      );
+    }
+    return false;
+  }
+
+  const was = round2(mine.reduce((s, r) => s + Number(r.amountFcy ?? 0), 0));
+  const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+  let changed = false;
+  let nextSeq = Math.max(0, ...existing.map((r) => r.seq)) + 1;
+  for (const [i, w] of wanted.entries()) {
+    const data = {
+      receiptDate: iso(w.date),
+      amountFcy: w.amount,
+      exchangeRate: w.exchangeRate,
+      bankRef: [`${STATEMENT_SOURCE}${read.asOn ? ` as on ${read.asOn}` : ""}`, w.bank, w.irm ? `IRM ${w.irm}` : null].filter(Boolean).join(" · "),
+      remarks: w.date ? null : "The statement gives this receipt no date.",
+    };
+    const have = mine[i];
+    if (!have) {
+      await prisma.ptReceipt.create({ data: { invoiceId, seq: nextSeq++, ...data } });
+      changed = true;
+      continue;
+    }
+    const same =
+      Math.abs(Number(have.amountFcy ?? 0) - w.amount) <= 0.01 &&
+      day(have.receiptDate) === w.date &&
+      (have.exchangeRate === null ? null : Number(have.exchangeRate)) === w.exchangeRate &&
+      have.bankRef === data.bankRef;
+    if (same) continue;
+    await prisma.ptReceipt.update({ where: { id: have.id }, data });
+    changed = true;
+  }
+  if (mine.length > wanted.length) {
+    await prisma.ptReceipt.deleteMany({ where: { id: { in: mine.slice(wanted.length).map((r) => r.id) } } });
+    changed = true;
+  }
+  if (changed && Math.abs(was - total) > 0.01) {
+    result.changes.push({ invoiceNo: label, field: "received", from: was.toFixed(2), to: total.toFixed(2) });
+  }
+  return changed;
+}
+
 /** CN and DN columns, where a sheet has them. None of the four reference sheets does. */
 async function syncSheetNotes(invoiceId: string, row: SheetRow): Promise<void> {
   for (const [type, amount] of [
@@ -590,6 +696,224 @@ async function recordTheirFigures(
   result.warnings.push(
     `'${block.label}' was read as the customer's own position and stored against each invoice as ` +
       "the balance per their records. It is never merged into ours — the difference is reported.",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// An outstanding statement: every customer in one upload
+// ---------------------------------------------------------------------------
+
+/**
+ * Import an outstanding statement — one SheetRead per customer (the reader
+ * split it by Customer Code) — as one upload: each customer found or made,
+ * each invoice added or updated, each receipt brought in. One record of the
+ * upload, so deleting it takes away what it alone brought.
+ */
+async function importStatement(
+  reads: SheetRead[],
+  buffer: Buffer,
+  fileName: string,
+  hash: string,
+  opts: { replace?: boolean; dryRun?: boolean },
+): Promise<ImportResult> {
+  const rows = reads.flatMap((r) => r.blocks[0]?.rows ?? []);
+  const first = reads[0];
+  const currencies = [...new Set(rows.map((r) => r.currency).filter(Boolean))] as string[];
+  const result = blank({
+    ok: true,
+    customer: `${reads.length} customers`,
+    customerSource: "the statement's Customer Code column",
+    asOn: first.asOn,
+    asOnSource: first.asOnSource,
+    currency: currencies.length === 1 ? currencies[0] : null,
+    currencySource: currencies.length ? `the statement's Currency column (${currencies.join(", ")})` : "no currency on the statement",
+    rowsRead: rows.length,
+    mapping: first.blocks[0]?.mapping ?? {},
+    unmapped: [],
+    warnings: reads.flatMap((r) => r.warnings),
+    totals: null,
+  });
+  result.terms = termInventory(rows, null, await loadRules());
+  result.duplicates = duplicatesIn(rows);
+
+  const all = await prisma.ptCustomer.findMany();
+  /**
+   * The customer a statement's code is: any spelling of its name the statement
+   * uses, as written, then by its key — and failing both, the one customer
+   * that already holds its invoices ("Natursteinbetreib" for NATURSTEINBETRIEB).
+   */
+  const known = async (read: SheetRead) => {
+    const names = read.statement?.names.length ? read.statement.names : [read.customerName ?? ""];
+    const byName =
+      names.map((n) => all.find((c) => key(c.name) === key(n))).find(Boolean) ??
+      names.map((n) => all.find((c) => clientKey(c.name) && clientKey(c.name) === clientKey(n))).find(Boolean);
+    if (byName) return byName;
+    const numbers = (read.blocks[0]?.rows ?? []).map((r) => r.invoiceNo).filter((n): n is string => Boolean(n));
+    const holders = new Set(
+      (await prisma.ptInvoice.findMany({ where: { invoiceNo: { in: numbers } }, select: { customerId: true } })).map((i) => i.customerId),
+    );
+    const [only] = [...holders];
+    return holders.size === 1 && only ? (all.find((c) => c.id === only) ?? null) : null;
+  };
+
+  if (opts.dryRun) {
+    for (const read of reads) {
+      const customer = await known(read);
+      const found = await findInvoices(customer?.name ?? read.customerName, read.blocks[0]?.rows ?? []);
+      for (const row of read.blocks[0]?.rows ?? []) {
+        if (!row.invoiceNo || isAdvance(row)) continue;
+        (found.has(key(row.invoiceNo)) ? result.updated : result.created).push(row.invoiceNo);
+      }
+    }
+    result.message = statementSummary(result, reads.length, true);
+    return result;
+  }
+
+  const seen = new Set<string>();
+  for (const read of reads) {
+    const customer = await known(read);
+    let customerId: string | null = customer?.id ?? null;
+    if (customer && read.customerName && key(customer.name) !== key(read.customerName)) {
+      result.warnings.push(`${read.statement?.customerCode ?? read.customerName}: matched to ${customer.name}, already here, rather than adding "${read.customerName}".`);
+    }
+    if (customer) {
+      const fill: Record<string, string> = {};
+      if (!customer.currency && read.currency) fill.currency = read.currency;
+      if (!customer.country) {
+        const country = read.blocks[0]?.rows.find((r) => r.country)?.country;
+        if (country) fill.country = country;
+      }
+      if (Object.keys(fill).length) await prisma.ptCustomer.update({ where: { id: customer.id }, data: fill });
+    } else if (read.customerName) {
+      const made = await prisma.ptCustomer.create({
+        data: {
+          name: read.customerName,
+          currency: read.currency,
+          country: read.blocks[0]?.rows.find((r) => r.country)?.country ?? null,
+          consignee: read.customerName,
+          notes: `Created from ${fileName} (the outstanding statement's customer${read.statement?.customerCode ? ` ${read.statement.customerCode}` : ""}).`,
+        },
+      });
+      all.push(made);
+      customerId = made.id;
+    }
+
+    for (const row of read.blocks[0]?.rows ?? []) {
+      const label = row.invoiceNo ?? `row ${row.sourceRow}`;
+      // an advance is money the customer paid before an invoice: on account
+      if (isAdvance(row)) {
+        if (customerId) await syncAdvance(customerId, row, read, result);
+        else result.skipped.push({ invoiceNo: label, why: `An advance on row ${row.sourceRow} names no customer, so it could not be held on account.` });
+        continue;
+      }
+      if (row.invoiceNo && seen.has(key(row.invoiceNo))) {
+        result.skipped.push({ invoiceNo: label, why: `Appears more than once in this statement (row ${row.sourceRow}); the first one was used.` });
+        continue;
+      }
+      if (row.invoiceNo) seen.add(key(row.invoiceNo));
+      for (const note of row.notes) result.warnings.push(`${label}: ${note}`);
+      const outcome = await upsertInvoice(row, read, customerId, result);
+      result[outcome].push(label);
+    }
+
+    // a customer made for this statement whose invoices all turned out to be
+    // another customer's already is not kept as an empty name
+    if (!customer && customerId) {
+      const [invoices, held] = await Promise.all([
+        prisma.ptInvoice.count({ where: { customerId } }),
+        prisma.ptOnAccount.count({ where: { customerId } }),
+      ]);
+      if (!invoices && !held) await prisma.ptCustomer.delete({ where: { id: customerId } });
+    }
+  }
+
+  const saved = await prisma.ptImport.create({
+    data: {
+      fileName,
+      sheetName: first.sheetName,
+      sha256: hash,
+      customerName: `${reads.length} customers (outstanding statement)`,
+      asOn: iso(first.asOn),
+      asOnSource: first.asOnSource,
+      currency: result.currency,
+      currencySource: result.currencySource,
+      rowsRead: rows.length,
+      created: result.created.length,
+      updated: result.updated.length,
+      skipped: result.skipped.length,
+      report: toJson({
+        mapping: result.mapping,
+        unmapped: [],
+        created: result.created,
+        updated: result.updated,
+        unchanged: result.unchanged,
+        skipped: result.skipped,
+        duplicates: result.duplicates,
+        changes: result.changes,
+        comparison: [],
+        terms: result.terms,
+        customers: reads.map((r) => ({ code: r.statement?.customerCode ?? null, name: r.customerName, invoices: r.blocks[0]?.rows.length ?? 0 })),
+      }),
+      warnings: toJson(result.warnings),
+      content: new Uint8Array(buffer),
+    },
+  });
+  result.importId = saved.id;
+  result.message = statementSummary(result, reads.length, false);
+  return result;
+}
+
+/** A statement row that is an advance received, not an invoice: "Advance", a negative amount. */
+function isAdvance(row: SheetRow): boolean {
+  return /^advance\b/i.test(row.invoiceNo ?? "") || ((row.customerInvoiceValue ?? 0) < 0 && !/\d/.test(row.invoiceNo ?? ""));
+}
+
+/**
+ * An advance on the statement, held on account for its customer — the same
+ * record "Payments and notes on account" keeps, to be put against invoices
+ * there. Found again on a re-import by its date and amount, so it is not
+ * added twice.
+ */
+async function syncAdvance(customerId: string, row: SheetRow, read: SheetRead, result: ImportResult): Promise<void> {
+  const amount = Math.abs(row.customerInvoiceValue ?? row.statedBalance ?? 0);
+  if (amount <= 0.01) return;
+  const reference = `${STATEMENT_SOURCE} advance`;
+  const entryDate = iso(row.invoiceDate);
+  const already = await prisma.ptOnAccount.findFirst({
+    where: { customerId, kind: "RECEIPT", reference, amount, entryDate },
+  });
+  if (already) {
+    result.unchanged.push(`Advance ${row.invoiceDate ?? ""}`.trim());
+    return;
+  }
+  await prisma.ptOnAccount.create({
+    data: {
+      customerId,
+      kind: "RECEIPT",
+      entryDate,
+      amount,
+      currency: row.currency ?? read.currency,
+      exchangeRate: row.exchangeRate,
+      reference,
+      remarks: `An advance on ${read.fileName}${read.asOn ? ` as on ${read.asOn}` : ""}, row ${row.sourceRow}; put it against invoices under "Payments and notes on account".`,
+    },
+  });
+  result.warnings.push(
+    `${read.customerName ?? "A customer"}: an advance of ${amount.toFixed(2)}${row.currency ? ` ${row.currency}` : ""}${row.invoiceDate ? ` dated ${row.invoiceDate}` : ""} is held on account, not added as an invoice.`,
+  );
+}
+
+function statementSummary(r: ImportResult, customers: number, dryRun: boolean): string {
+  const parts: string[] = [];
+  if (r.created.length) parts.push(`${r.created.length} invoice(s) ${dryRun ? "would be added" : "added"}`);
+  if (r.updated.length) parts.push(`${r.updated.length} ${dryRun ? "would be updated" : "updated"}`);
+  if (r.unchanged.length) parts.push(`${r.unchanged.length} unchanged`);
+  if (r.skipped.length) parts.push(`${r.skipped.length} skipped`);
+  if (!parts.length) parts.push("nothing to import");
+  return (
+    `Outstanding statement — ${customers} customer(s), ${r.rowsRead} invoice row(s): ${parts.join(", ")}.` +
+    ` As on ${r.asOn ?? "not stated"}.` +
+    (dryRun ? " Nothing was saved." : "")
   );
 }
 

@@ -49,7 +49,7 @@ export default async function UploadPage() {
     <>
       <PageHead
         title="Upload Sheet"
-        lead="Upload a customer payment sheet. Columns are detected from their headings; nothing missing is invented."
+        lead="Upload a customer payment sheet, or the export outstanding statement with many customers, invoices and receipts. Columns are detected from their headings; nothing missing is invented."
         actions={
           <Link href={ROUTES.newRecord} className="btn-ghost">
             Enter by hand instead

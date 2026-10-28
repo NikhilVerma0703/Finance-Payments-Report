@@ -31,6 +31,7 @@
 import ExcelJS from "exceljs";
 
 import { clean, columnLetter, toIsoDate, toNumber } from "../text";
+import { toCurrencyCode } from "./erpClients";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -76,6 +77,12 @@ export interface SheetRow {
   remarks: string | null;
   /** Anything the reader could not make sense of on this row. */
   notes: string[];
+  /**
+   * Each payment on its own, where the sheet lists them (an outstanding
+   * statement's receipt bands). Absent on a customer's own sheet, whose
+   * single cumulative `received` stands for them all.
+   */
+  receipts?: SheetReceipt[];
 }
 
 export type BlockKind = "OURS" | "CUSTOMER";
@@ -108,6 +115,12 @@ export interface SheetRead {
   blocks: SheetBlock[];
   strayCells: Array<{ ref: string; value: string; formula: string | null }>;
   warnings: string[];
+  /**
+   * Set when this is one customer's part of a many-customer outstanding
+   * statement: its code, how many customers the statement holds, and every
+   * spelling of its name the statement uses, the commonest first.
+   */
+  statement?: { customerCode: string | null; customers: number; names: string[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +233,8 @@ function textOf(cell: ExcelJS.Cell | undefined): string | null {
 export async function readPaymentSheet(buffer: Buffer, fileName: string): Promise<SheetRead[]> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer as unknown as ArrayBuffer);
-  return wb.worksheets.map((ws) => readSheet(ws, fileName));
+  // a statement of many customers is read as one sheet per customer
+  return wb.worksheets.flatMap((ws) => (isOutstandingStatement(ws) ? readOutstandingStatement(ws, fileName) : [readSheet(ws, fileName)]));
 }
 
 function readSheet(ws: ExcelJS.Worksheet, fileName: string): SheetRead {
@@ -793,4 +807,297 @@ export function parseRemittance(remarks: string | null): { ref: string | null; t
     ref: `${part ? "Part of" : "Receipt of"} ${total.toFixed(2)}`,
     total,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The export outstanding statement: many customers, many receipts per invoice
+// ---------------------------------------------------------------------------
+//
+// The office's own "Statement of Export Outstanding Receivables" (owner, 28 Oct
+// 2026: "make upload accept these excels too — multiple customer multiple inv
+// multiple receipts"): one row per invoice for every customer, a Customer Code
+// column saying whose it is, and the receipts laid out side by side — a band
+// headed "Receipt -1", "Receipt -2" … over Bank, IRM No, Date, Amount, Ex.Rate
+// and Forex Gain / (Loss) — then debit and credit notes, the total receivable
+// and received in the invoice's currency, and the shipping details.
+//
+// It is read into one SheetRead per customer, so each is imported exactly as a
+// customer's own sheet is — matched by name, invoices by number — and each
+// receipt becomes a receipt of its own with its date, rate, bank and IRM. The
+// columns are found by their headings, not their letters, so a re-ordered
+// export still reads. Two headings say less than the cells under them: "PO No"
+// holds the proforma (PI-SAL-ORD/…) and "PO Date" the purchase order
+// (PO-7004 Dated: 13/06/2025), so each cell is read by what it says.
+
+/** One payment against one invoice, as a receipt band gives it. */
+export interface SheetReceipt {
+  /** The band it came from: 1 for "Receipt -1". */
+  seq: number;
+  date: string | null;
+  amount: number;
+  exchangeRate: number | null;
+  bank: string | null;
+  /** The bank's inward remittance reference. */
+  irm: string | null;
+}
+
+/** The headings of an outstanding statement, by what each column holds. */
+const LEDGER: Array<[string, RegExp]> = [
+  ["customerCode", /^customer ?code|^party ?code|^cust\.? ?code/],
+  ["salesPerson", /^sales ?person/],
+  ["invoiceNo", /^(invoice|inv)\.? ?(no|num|#)/],
+  ["invoiceDate", /^(invoice|inv)\.? ?date/],
+  ["customerInvoiceValue", /^customer invoice value|^invoice value|^(customer )?invoice amount/],
+  ["poNo", /^po\.? ?no/],
+  ["poDate", /^po\.? ?date/],
+  ["consignee", /^consignee/],
+  ["notifyParty", /^notify/],
+  ["country", /^country/],
+  ["destination", /^final destination|^destination/],
+  ["deliveryTerms", /^delivery terms|^incoterms?/],
+  ["paymentTerms", /^payment ?terms?/],
+  ["currency", /^currency|^curr\b/],
+  ["exchangeRate", /^(invoice )?(exchange|ex\.?) ?rate/],
+  ["debitNote", /^debit ?note/],
+  ["creditNote", /^credit ?note/],
+  ["excess", /^ex(c)?ess\s+payment/],
+  ["statedBalance", /^total receivables?|^total outstanding|^outstanding/],
+  ["statedReceived", /^total receipts?/],
+  ["statedDueDate", /^payment due date|^due date/],
+  ["statedOverdueDays", /^overdue in days|^overdue days|^days overdue/],
+  ["shippingBillNo", /^sb ?no|^shipping ?bill ?no/],
+  ["shippingBillDate", /^sb ?date|^shipping ?bill ?date/],
+  ["blNo", /^bl ?no|^b\/l ?no/],
+  ["blDate", /^bl ?date|^b\/l ?date/],
+  ["containerNo", /^container ?no/],
+  ["eta", /^eta/],
+  ["remarks", /^remarks?/],
+  ["salesRemarks", /^sales team remarks?/],
+];
+
+const RECEIPT_PARTS: Array<[keyof Omit<SheetReceipt, "seq">, RegExp]> = [
+  ["bank", /^bank$/],
+  ["irm", /^irm/],
+  ["date", /^date$|receipt date/],
+  ["amount", /^amount/],
+  ["exchangeRate", /^(ex(change)?\.? ?rate)/],
+];
+
+/** Where an outstanding statement's header is, and the receipt bands over it. */
+function findLedgerHeader(ws: ExcelJS.Worksheet, maxRow: number, maxCol: number) {
+  for (let r = 1; r <= Math.min(maxRow, 40); r += 1) {
+    const cols: Record<string, number> = {};
+    for (let c = 1; c <= maxCol; c += 1) {
+      const text = squash(valueOf(ws.getCell(r, c)));
+      if (!text) continue;
+      for (const [key, re] of LEDGER) {
+        // the first column of a name wins: "Invoice No" is repeated at the far right
+        if (re.test(text) && cols[key] === undefined && !(key === "salesRemarks" && cols.salesRemarks)) {
+          if (key === "remarks" && /^sales/.test(text)) continue;
+          cols[key] = c;
+          break;
+        }
+      }
+    }
+    if (cols.customerCode === undefined || cols.invoiceNo === undefined) continue;
+
+    // the receipt bands: a heading row above saying "Receipt -1", "Receipt 2" …
+    const bands = new Map<number, Partial<Record<keyof Omit<SheetReceipt, "seq">, number>>>();
+    for (let c = 1; c <= maxCol; c += 1) {
+      const band = /receipt\s*-?\s*(\d+)/.exec(squash(valueOf(ws.getCell(r - 1, c))) || squash(ws.getCell(r - 1, c).text));
+      if (!band) continue;
+      const seq = Number(band[1]);
+      const sub = squash(valueOf(ws.getCell(r, c)));
+      const part = RECEIPT_PARTS.find(([, re]) => re.test(sub))?.[0];
+      if (!part) continue;
+      const parts = bands.get(seq) ?? {};
+      if (parts[part] === undefined) parts[part] = c;
+      bands.set(seq, parts);
+    }
+    return { row: r, cols, bands: [...bands.entries()].filter(([, p]) => p.amount !== undefined).sort((a, b) => a[0] - b[0]) };
+  }
+  return null;
+}
+
+/** A statement of many customers' invoices, or not. */
+export function isOutstandingStatement(ws: ExcelJS.Worksheet): boolean {
+  const maxRow = Math.max(ws.rowCount ?? 0, ws.actualRowCount ?? 0);
+  const maxCol = Math.max(ws.columnCount ?? 0, ws.actualColumnCount ?? 0);
+  return findLedgerHeader(ws, maxRow, maxCol) !== null;
+}
+
+/** An exchange rate: kept to six places — money's two would move every forex figure. */
+function rateOf(cell: ExcelJS.Cell | undefined): number | null {
+  const v = valueOf(cell);
+  const n = typeof v === "number" ? v : toNumber(clean(v));
+  return n === null || !Number.isFinite(n) ? null : Math.round(n * 1e6) / 1e6;
+}
+
+/** "PI-SAL-ORD/24-25/00312 Dated: 08/11/2024" → the number, without its date. */
+function refOf(text: string | null): string | null {
+  const t = (text ?? "").replace(/\s+dated\s*:?.*$/i, "").trim();
+  return t && t !== "-" ? t : null;
+}
+
+/**
+ * Read an outstanding statement into one SheetRead per customer.
+ *
+ * A customer is its Customer Code; its name is the consignee its rows name
+ * most often (two spellings of one firm are one customer). Rows with no
+ * invoice number are passed over — the statement pads itself with empty rows.
+ */
+export function readOutstandingStatement(ws: ExcelJS.Worksheet, fileName: string): SheetRead[] {
+  const maxRow = Math.max(ws.rowCount ?? 0, ws.actualRowCount ?? 0);
+  const maxCol = Math.max(ws.columnCount ?? 0, ws.actualColumnCount ?? 0);
+  const head = findLedgerHeader(ws, maxRow, maxCol);
+  if (!head) return [];
+  const { cols, bands } = head;
+  const at = (r: number, key: string) => (cols[key] === undefined ? undefined : ws.getCell(r, cols[key]));
+  const text = (r: number, key: string) => textOf(at(r, key));
+  const num = (r: number, key: string) => numberOf(at(r, key));
+  const date = (r: number, key: string) => dateOf(at(r, key));
+
+  // "Sheet Updated 28.10.2026" — the statement's own date, above the table
+  let asOn: string | null = null;
+  for (let r = 1; r < head.row && !asOn; r += 1) {
+    for (let c = 1; c < maxCol; c += 1) {
+      if (/^(sheet|statement)\s*updated|^as\s*on/.test(squash(valueOf(ws.getCell(r, c))))) {
+        asOn = dateOf(ws.getCell(r, c + 1)) ?? dateInText(clean(valueOf(ws.getCell(r, c + 1))));
+        if (asOn) break;
+      }
+    }
+  }
+
+  const mapping: Record<string, string> = {};
+  for (const [key, c] of Object.entries(cols)) mapping[key] = columnLetter(c);
+  for (const [seq, p] of bands) {
+    for (const [part, c] of Object.entries(p)) mapping[`receipt${seq}.${part}`] = columnLetter(c as number);
+  }
+
+  // every row, grouped by the customer it belongs to
+  const groups = new Map<string, { code: string | null; names: Map<string, number>; rows: SheetRow[] }>();
+  for (let r = head.row + 1; r <= maxRow; r += 1) {
+    const invoiceNo = text(r, "invoiceNo");
+    if (!invoiceNo) continue;
+    const code = text(r, "customerCode")?.replace(/\s+/g, " ").replace(/\s*-\s*/g, "-").toUpperCase() ?? null;
+    const consignee = text(r, "consignee");
+    const notes: string[] = [];
+
+    const receipts: SheetReceipt[] = [];
+    for (const [seq, p] of bands) {
+      const amount = p.amount === undefined ? null : numberOf(ws.getCell(r, p.amount));
+      if (amount === null || Math.abs(amount) <= 0.004) continue;
+      receipts.push({
+        seq,
+        amount: round2(amount),
+        date: p.date === undefined ? null : dateOf(ws.getCell(r, p.date)),
+        exchangeRate: p.exchangeRate === undefined ? null : rateOf(ws.getCell(r, p.exchangeRate)),
+        bank: p.bank === undefined ? null : textOf(ws.getCell(r, p.bank)),
+        irm: p.irm === undefined ? null : textOf(ws.getCell(r, p.irm)),
+      });
+    }
+    const received = receipts.length ? round2(receipts.reduce((s, x) => s + x.amount, 0)) : null;
+    const value = num(r, "customerInvoiceValue");
+    const creditNote = num(r, "creditNote");
+    const debitNote = num(r, "debitNote");
+    const statedBalance = num(r, "statedBalance");
+    const recomputed = value === null ? null : round2(value - (received ?? 0) - (creditNote ?? 0) + (debitNote ?? 0));
+    const balanceAgrees = statedBalance === null || recomputed === null || Math.abs(statedBalance - recomputed) <= 0.01;
+    if (!balanceAgrees) notes.push(`The statement gives ${statedBalance} outstanding where value − receipts − credit notes + debit notes gives ${recomputed}.`);
+    const excess = num(r, "excess");
+    if (excess) notes.push(`The statement records ${excess} of excess payment adjusted against this invoice; it is not counted as a receipt here — record it on the invoice if it should be.`);
+
+    // "PO No" and "PO Date" hold the proforma and the purchase order: read each cell by what it says
+    const refs = [refOf(text(r, "poNo")), refOf(text(r, "poDate"))].filter((x): x is string => Boolean(x));
+    const piNo = refs.find((x) => /^pi\b|^pi-|^pi\s/i.test(x)) ?? null;
+    const poNo = refs.find((x) => x !== piNo) ?? null;
+
+    const remarks = [text(r, "remarks"), text(r, "salesRemarks") ? `Sales team: ${text(r, "salesRemarks")}` : null].filter(Boolean).join(" · ") || null;
+    const latest = receipts.map((x) => x.date).filter((d): d is string => Boolean(d)).sort().at(-1) ?? null;
+
+    const row: SheetRow = {
+      sourceRow: r,
+      slNo: null,
+      invoiceNo,
+      invoiceDate: date(r, "invoiceDate"),
+      customerInvoiceValue: value,
+      customsInvoiceValue: null,
+      exchangeRate: rateOf(at(r, "exchangeRate")),
+      received,
+      receiptDate: latest,
+      receiptExchangeRate: null,
+      statedBalance,
+      balanceAgrees,
+      creditNote,
+      debitNote,
+      paymentTerms: text(r, "paymentTerms"),
+      paymentTermsLevel: cols.paymentTerms === undefined ? "none" : "invoice",
+      containerNo: text(r, "containerNo"),
+      statedDueDate: date(r, "statedDueDate"),
+      statedOverdueDays: num(r, "statedOverdueDays"),
+      poNo,
+      piNo,
+      shippingBillNo: text(r, "shippingBillNo"),
+      shippingBillDate: date(r, "shippingBillDate"),
+      blNo: text(r, "blNo"),
+      blDate: date(r, "blDate"),
+      consignee,
+      notifyParty: text(r, "notifyParty"),
+      country: text(r, "country") ?? text(r, "destination"),
+      currency: toCurrencyCode(text(r, "currency")),
+      remarks,
+      notes,
+      receipts,
+    };
+
+    const key = code ?? `~${squash(consignee)}`;
+    const g: { code: string | null; names: Map<string, number>; rows: SheetRow[] } = groups.get(key) ?? { code, names: new Map(), rows: [] };
+    if (consignee) g.names.set(consignee.trim(), (g.names.get(consignee.trim()) ?? 0) + 1);
+    g.rows.push(row);
+    groups.set(key, g);
+  }
+
+  const reads: SheetRead[] = [];
+  for (const g of groups.values()) {
+    // the spelling the statement uses most, first among equals
+    const name = [...g.names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    const currencies = new Set(g.rows.map((x) => x.currency).filter(Boolean));
+    const currency = currencies.size === 1 ? [...currencies][0]! : null;
+    const totals = {
+      value: round2(g.rows.reduce((s, x) => s + (x.customerInvoiceValue ?? 0), 0)),
+      received: round2(g.rows.reduce((s, x) => s + (x.received ?? 0), 0)),
+      balance: round2(g.rows.reduce((s, x) => s + (x.customerInvoiceValue ?? 0) - (x.received ?? 0) - (x.creditNote ?? 0) + (x.debitNote ?? 0), 0)),
+    };
+    const warnings: string[] = [];
+    if (g.names.size > 1) warnings.push(`${g.code ?? name}: the statement spells this customer ${[...g.names.keys()].map((n) => `"${n}"`).join(" and ")}; they were read as one customer, "${name}".`);
+    if (currencies.size > 1) warnings.push(`${name}: invoices in ${[...currencies].join(" and ")} — each keeps its own currency.`);
+    reads.push({
+      fileName,
+      sheetName: ws.name,
+      customerName: name,
+      customerSource: g.code ? `the statement's Customer Code ${g.code} and its consignee` : "the statement's consignee",
+      asOn,
+      asOnSource: asOn ? "cell" : "not stated",
+      currency,
+      currencySource: currency ? "the statement's Currency column" : currencies.size ? "several currencies on this customer's rows" : "no currency on this customer's rows",
+      headerPaymentTerms: null,
+      blocks: [
+        {
+          label: `${name ?? g.code ?? "No customer"}${g.code ? ` (${g.code})` : ""}`,
+          kind: "OURS",
+          headerRow: head.row,
+          mapping,
+          unmapped: [],
+          rows: g.rows,
+          totals,
+          statedTotals: null,
+          totalIssues: [],
+        },
+      ],
+      strayCells: [],
+      warnings,
+      statement: { customerCode: g.code, customers: groups.size, names: [...g.names.entries()].sort((a, b) => b[1] - a[1]).map(([n]) => n) },
+    });
+  }
+  return reads;
 }

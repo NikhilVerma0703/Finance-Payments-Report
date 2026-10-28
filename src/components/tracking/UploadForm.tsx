@@ -36,9 +36,10 @@ export function UploadForm() {
     <>
       <form action={action} className="card mb-5">
         <div className="rounded-xl border-2 border-dashed border-[#c3d1e0] bg-[#fbfdff] p-8 text-center">
-          <div className="text-[15px] font-semibold">Choose a customer payment sheet</div>
+          <div className="text-[15px] font-semibold">Choose a customer payment sheet or an outstanding statement</div>
           <div className="mt-1 text-xs text-[var(--color-ink-3)]">
-            Excel (.xlsx, .xls or .xlsm)
+            Excel (.xlsx, .xls or .xlsm) · one customer&apos;s sheet, or the export outstanding statement with every customer and
+            each receipt side by side
           </div>
           <input type="file" name="file" accept=".xlsx,.xls,.xlsm" className="mt-4 text-sm" />
         </div>
