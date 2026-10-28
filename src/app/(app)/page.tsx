@@ -21,8 +21,9 @@
 import Link from "next/link";
 
 import { CustomerSummary, DEFAULT_SUMMARY_SORT, isSummarySort } from "@/components/tracking/CustomerSummary";
-import { AgeingSummary, Dashboard } from "@/components/tracking/Dashboard";
-import { AttentionStrip, asAtTime, OverviewHead, type AttentionItem } from "@/components/tracking/Overview";
+import { TipLayer } from "@/components/dash/client/TipLayer";
+import { AgeingSummary, Collections, Dashboard } from "@/components/tracking/Dashboard";
+import { AttentionStrip, asAtTime, GroupHead, OverviewHead, type AttentionItem } from "@/components/tracking/Overview";
 import { DataQualityAlerts, PriorityFollowUps, UpcomingSchedule } from "@/components/tracking/Management";
 import { AllInvoices, PendingSwitch } from "@/components/tracking/PendingView";
 import { fillCurrenciesAction } from "@/server/payments/currencyActions";
@@ -97,7 +98,15 @@ export default async function DashboardPage({
   const month = today.slice(0, 7);
 
   return (
-    <>
+    <div className="dash-scope">
+      {/* Hover, focus or press-and-hold a figure: what it is (the Production overview's one island). */}
+      <TipLayer />
+      {/* THE DECK — one white card with the teal edge, as the Pacific ERP's
+          Production overview opens (owner, 28 Oct 2026): what the page is as
+          at, what needs attention, and the two heroes — total, outstanding and
+          overdue, and what is late, by how much and owed by whom. */}
+      <div className="dash-deck mb-6 rounded-2xl p-3 text-gray-900 sm:p-5 xl:p-6 print:p-0">
+        <div className="flex flex-col gap-5">
       <OverviewHead
         today={today}
         time={time}
@@ -206,6 +215,13 @@ export default async function DashboardPage({
           )}
 
           <Dashboard kpis={kpis} today={today} invoices={visible} receiptsFrom={inView} onAccount={onAccount} filters={filters} />
+        </>
+      )}
+        </div>
+      </div>
+
+      {counts.total > 0 && (
+        <>
 
           <CustomerSummary
             customers={customers}
@@ -220,30 +236,40 @@ export default async function DashboardPage({
             search={cq}
           />
 
-          <AgeingSummary
-            kpis={kpis}
-            filters={filters}
-            invoices={visible}
-            receiptsFrom={inView}
-            onAccount={onAccount}
-            customers={customers}
-            today={today}
-          />
-
-          <div className="-mt-3 mb-6 text-right text-[12px]">
-            <Link href={ROUTES.ageing} className="link">
-              Full ageing analysis — by customer, by status, customer payment performance →
-            </Link>
-          </div>
+          <section className="mb-6 mt-6">
+            <GroupHead>What lies ahead</GroupHead>
+            <AgeingSummary
+              kpis={kpis}
+              filters={filters}
+              invoices={visible}
+              receiptsFrom={inView}
+              onAccount={onAccount}
+              customers={customers}
+              today={today}
+            />
+            <div className="mt-2 text-right text-[12px]">
+              <Link href={ROUTES.ageing} className="link">
+                Full ageing analysis — by customer, by status, customer payment performance →
+              </Link>
+            </div>
+          </section>
 
           {/* the working lists (owner, 26 Oct 2026): what falls due next, who to
-              chase first and what the records are missing */}
-          <UpcomingSchedule
-            schedule={upcomingSchedule(visible, today)}
-            window={sched}
-            windowHref={(d) => `${ROUTES.dashboard}?${toQuery(filters, { ...keepView, sched: String(d) })}#upcoming`}
-            dueHref={(d) => searchOn({ dateField: "due", from: today, to: addDays(today, d), open: "1" })}
-          />
+              chase first and what the records are missing — and what came in */}
+          <GroupHead dot="#2dd4bf">Plan and chase</GroupHead>
+          <div className="mb-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-12 xl:gap-5">
+            <div className="min-w-0 xl:col-span-7">
+              <UpcomingSchedule
+                schedule={upcomingSchedule(visible, today)}
+                window={sched}
+                windowHref={(d) => `${ROUTES.dashboard}?${toQuery(filters, { ...keepView, sched: String(d) })}#upcoming`}
+                dueHref={(d) => searchOn({ dateField: "due", from: today, to: addDays(today, d), open: "1" })}
+              />
+            </div>
+            <div className="min-w-0 xl:col-span-5">
+              <Collections kpis={kpis} today={today} receiptsFrom={inView} onAccount={onAccount} filters={filters} />
+            </div>
+          </div>
 
           {done && (
             <Banner tone={/saved/i.test(done) ? "ok" : "info"}>{done}</Banner>
@@ -289,7 +315,7 @@ export default async function DashboardPage({
           </div>
         </>
       )}
-    </>
+    </div>
   );
 }
 

@@ -25,10 +25,10 @@ import {
 import { ROUTES } from "@/lib/routes";
 import { saveFollowUpAction } from "@/server/payments/managementActions";
 import { day, money, StatusChip, TONE_CLASS } from "./bits";
-import { Eyebrow } from "./Overview";
+import { Eyebrow, TILE } from "./Overview";
 
 const cur = (c: string | null) => (c && c !== "—" ? c : null);
-const CARD = "rounded-2xl border border-[var(--color-line)] bg-white p-5";
+const CARD = TILE;
 const TH = "whitespace-nowrap px-2 py-2 text-left text-[10.5px] font-bold uppercase tracking-[0.1em] text-[var(--color-ink-3)]";
 const TD = "px-2 py-2";
 
@@ -62,9 +62,7 @@ export function UpcomingSchedule({
             key={w.days}
             href={windowHref(w.days)}
             aria-current={w.days === window ? "true" : undefined}
-            className={`rounded-xl border px-3 py-2 transition-colors ${
-              w.days === window ? "border-[var(--color-brand-2)] bg-[var(--color-info-bg)]" : "border-[var(--color-line)] hover:bg-[var(--color-shell)]"
-            }`}
+            className={`rounded-xl px-3 py-2 transition ${w.days === window ? "bg-brand-50 ring-2 ring-inset ring-brand-500" : "dash-glass hover:bg-gray-50"}`}
           >
             <div className="text-[11px] font-semibold text-[var(--color-ink-2)]">Next {w.days} days</div>
             {w.totals.length === 0 ? (

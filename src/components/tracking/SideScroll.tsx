@@ -28,8 +28,28 @@ export function SideScroll({ children, label }: { children: ReactNode; label: st
     return () => watch.disconnect();
   }, []);
 
+  // The bar the last copy was written to. Writing a scrollLeft fires that
+  // element's own scroll event, which used to copy the position straight back
+  // — and at a fractional zoom the two never agree exactly, so the bars traded
+  // half-pixels and the table juddered while it scrolled (owner, 28 Oct 2026:
+  // "fix the scroll bar flickering on scroll"). The echo is now dropped, and a
+  // difference under a pixel is not a scroll.
+  const echo = useRef<HTMLDivElement | null>(null);
   const follow = (from: HTMLDivElement | null, to: HTMLDivElement | null) => {
-    if (from && to && to.scrollLeft !== from.scrollLeft) to.scrollLeft = from.scrollLeft;
+    if (!from || !to) return;
+    if (echo.current === from) {
+      echo.current = null;
+      return;
+    }
+    if (Math.abs(to.scrollLeft - from.scrollLeft) < 1) return;
+    echo.current = to;
+    to.scrollLeft = from.scrollLeft;
+    // a write the browser clamped fires no event: let the next real scroll through
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (echo.current === to) echo.current = null;
+      }),
+    );
   };
 
   return (
