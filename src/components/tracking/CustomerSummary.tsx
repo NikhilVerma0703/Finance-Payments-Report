@@ -3,9 +3,12 @@
  * currency underneath. Two currencies are never added together.
  *
  * The table management reads first, so it is laid out to be read left to
- * right: who, how many invoices, what was invoiced, what came in and when it
- * last did, how much of it, what is still owed and how much of that is late —
- * and one status that says where the customer stands (`customerStanding`).
+ * right: who, how many invoices, what was invoiced, what is still owed, how
+ * much of that is late and how much has been collected (owner, 29 Oct 2026:
+ * the order Sheet, S. No., Customer, Total invoices, Invoice value,
+ * Outstanding balance, Overdue, Collected) — then what came in and when it
+ * last did, and one status that says where the customer stands
+ * (`customerStanding`).
  * Amounts are in the customer's invoice currency, with its own symbol and
  * grouping.
  *
@@ -181,14 +184,14 @@ export function CustomerSummary({
                 <th className={`${th} ${PIN.name} text-left`}>Customer</th>
                 <th className={`${th} text-right`}>Total invoices</th>
                 <th className={`${th} text-right`}>Invoice value</th>
-                <th className={`${th} text-right`}>Total received</th>
-                <th className={`${th} text-left`} title="The latest date a payment came in from the customer — the default order, newest first">
-                  Last payment
-                </th>
-                <th className={`${th} text-left`}>Collected</th>
                 <th className={`${th} text-right`}>Outstanding balance</th>
                 <th className={`${th} text-right`} title="The part of the balance whose due date has passed">
                   Overdue amount
+                </th>
+                <th className={`${th} text-left`}>Collected</th>
+                <th className={`${th} text-right`}>Total received</th>
+                <th className={`${th} text-left`} title="The latest date a payment came in from the customer — the default order, newest first">
+                  Last payment
                 </th>
                 {anyOnAccount && (
                   <>
@@ -282,6 +285,18 @@ export function CustomerSummary({
                             {c.invoices > 0 && <div className="text-[10.5px] text-[var(--color-ink-3)]">{c.openInvoices} open</div>}
                           </td>
                           <td className={`${cell} whitespace-nowrap text-right tabular-nums`}>{coded(c.invoiceValue, cur)}</td>
+                          <td className={`${cell} whitespace-nowrap text-right font-semibold tabular-nums`}>{coded(c.outstanding, cur)}</td>
+                          <td className={`${cell} whitespace-nowrap text-right`}>
+                            {c.overdue > 0.01 ? (
+                              <>
+                                <div className="font-semibold tabular-nums text-[var(--color-bad-fg)]">{coded(c.overdue, cur)}</div>
+                                {c.oldestDue && <div className="text-[10.5px] text-[var(--color-ink-3)]">oldest due {day(c.oldestDue)}</div>}
+                              </>
+                            ) : (
+                              <Dash />
+                            )}
+                          </td>
+                          <td className={cell}>{c.invoices > 0 ? <Collected pct={c.collectedPct} /> : <Dash />}</td>
                           <td className={`${cell} whitespace-nowrap text-right tabular-nums ${c.received <= 0.01 ? "text-[var(--color-ink-3)]" : ""}`}>
                             {coded(c.received, cur)}
                           </td>
@@ -293,18 +308,6 @@ export function CustomerSummary({
                               </>
                             ) : (
                               <span className="text-[10.5px] text-[var(--color-ink-3)]">no dated payment</span>
-                            )}
-                          </td>
-                          <td className={cell}>{c.invoices > 0 ? <Collected pct={c.collectedPct} /> : <Dash />}</td>
-                          <td className={`${cell} whitespace-nowrap text-right font-semibold tabular-nums`}>{coded(c.outstanding, cur)}</td>
-                          <td className={`${cell} whitespace-nowrap text-right`}>
-                            {c.overdue > 0.01 ? (
-                              <>
-                                <div className="font-semibold tabular-nums text-[var(--color-bad-fg)]">{coded(c.overdue, cur)}</div>
-                                {c.oldestDue && <div className="text-[10.5px] text-[var(--color-ink-3)]">oldest due {day(c.oldestDue)}</div>}
-                              </>
-                            ) : (
-                              <Dash />
                             )}
                           </td>
                           {anyOnAccount && (
@@ -341,11 +344,6 @@ export function CustomerSummary({
                         <div className="text-[10.5px] font-normal text-[var(--color-ink-3)]">{t.open} open</div>
                       </td>
                       <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{coded(t.invoiced, cur)}</td>
-                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{coded(t.received, cur)}</td>
-                      <td className={`${foot} whitespace-nowrap text-[10.5px] font-normal text-[var(--color-ink-3)]`}>{t.last ? `latest ${day(t.last)}` : ""}</td>
-                      <td className={foot}>
-                        <Collected pct={pct} />
-                      </td>
                       <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{coded(t.outstanding, cur)}</td>
                       <td className={`${foot} whitespace-nowrap text-right`}>
                         {t.overdue > 0.01 ? (
@@ -357,6 +355,11 @@ export function CustomerSummary({
                           <Dash />
                         )}
                       </td>
+                      <td className={foot}>
+                        <Collected pct={pct} />
+                      </td>
+                      <td className={`${foot} whitespace-nowrap text-right tabular-nums`}>{coded(t.received, cur)}</td>
+                      <td className={`${foot} whitespace-nowrap text-[10.5px] font-normal text-[var(--color-ink-3)]`}>{t.last ? `latest ${day(t.last)}` : ""}</td>
                       {anyOnAccount && (
                         <>
                           <td className={`${foot} whitespace-nowrap text-right tabular-nums text-[var(--color-accent)]`}>
