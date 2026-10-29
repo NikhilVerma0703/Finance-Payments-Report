@@ -34,10 +34,11 @@ export default async function CustomerDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ onAccount?: string; done?: string }>;
+  /** ?open=missing unfolds Edit / add extra information at the foot of the page. */
+  searchParams: Promise<{ onAccount?: string; done?: string; open?: string }>;
 }) {
   const { id } = await params;
-  const { onAccount: message, done } = await searchParams;
+  const { onAccount: message, done, open } = await searchParams;
   const { customer, invoices, completed, onAccount, erp, kpis, today } = await loadCustomer(id);
   if (!customer) notFound();
 
@@ -190,78 +191,6 @@ export default async function CustomerDetailPage({
         history={history.entries}
       />
 
-      {/* Edit / add extra information: an uploaded sheet rarely carries
-          everything, so every invoice is listed with what it is missing and
-          opens in the full record form (BL date, PO number, shipping bill,
-          documents presented, rate …), which saves only what changed, on the
-          same invoice. */}
-      {invoices.length > 0 && (
-        <section className="card mb-5 scroll-mt-4" id="missing">
-          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="card-title mb-0">Edit / add extra information</h2>
-            <span className="text-[11px] text-[var(--color-ink-3)]">
-              {incomplete.length
-                ? `${incomplete.length} of ${invoices.length} invoice(s) are missing something`
-                : `all ${invoices.length} invoice(s) are complete`}
-            </span>
-          </div>
-          <div className="tablewrap">
-            <table className="w-full text-[12px]">
-              <thead>
-                <tr className="bg-[#eef2f7] text-left text-[10px] uppercase tracking-wide text-[var(--color-ink-2)]">
-                  <th className="px-3 py-2">Invoice</th>
-                  <th className="px-3 py-2">Invoice date</th>
-                  <th className="px-3 py-2">BL date</th>
-                  <th className="px-3 py-2">PO no.</th>
-                  <th className="px-3 py-2">Container</th>
-                  <th className="px-3 py-2">Payment terms</th>
-                  <th className="px-3 py-2">Missing</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {invoices.map((i) => {
-                  const gap = (
-                    <span className="rounded bg-[var(--color-warn-bg)] px-1.5 text-[11px] font-semibold text-[var(--color-warn-fg)]">
-                      missing
-                    </span>
-                  );
-                  return (
-                    <tr
-                      key={i.id}
-                      className={`border-t border-[var(--color-line)] ${i.missingFields.length ? "" : "text-[var(--color-ink-3)]"}`}
-                    >
-                      <td className="px-3 py-2 font-medium">
-                        <Link href={ROUTES.invoice(i.id)} className="link">
-                          {i.invoiceNo ?? "(no number)"}
-                        </Link>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2">{i.invoiceDate ? day(i.invoiceDate) : gap}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{i.blDate ? day(i.blDate) : gap}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{i.poNo ?? gap}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{i.containerNo ?? gap}</td>
-                      <td className="px-3 py-2">{i.paymentTerms ?? gap}</td>
-                      <td className="px-3 py-2 text-[11px] text-[var(--color-warn-fg)]">
-                        {i.missingFields.length ? (
-                          i.missingFields.map((f) => f.split(" — ")[0]).join(", ")
-                        ) : (
-                          <span className="text-[var(--color-ok-fg)]">complete</span>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2 text-right">
-                        <Link href={ROUTES.editInvoice(i.id)} className="btn-ghost btn-sm" title="Edit or add extra information">
-                          ✎ Edit / add extra information
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
       {invoices.length === 0 ? (
         <section className="card mb-5">
           <h2 className="card-title">Invoices</h2>
@@ -374,6 +303,90 @@ export default async function CustomerDetailPage({
           </span>
         </form>
       </section>
+
+      {/* Edit / add extra information: an uploaded sheet rarely carries
+          everything, so every invoice is listed with what it is missing and
+          opens in the full record form (BL date, PO number, shipping bill,
+          documents presented, rate …), which saves only what changed, on the
+          same invoice. At the foot of the page and folded (owner, 29 Oct 2026:
+          "this table should be at the bottom of the page collapsed as
+          default"); the master table's Edit / Add extra information opens it
+          (?open=missing). */}
+      {invoices.length > 0 && (
+        <details
+          id="missing"
+          open={open === "missing"}
+          className="group mt-5 scroll-mt-4 rounded-2xl border border-[var(--color-line)] bg-white"
+        >
+          <summary className="flex cursor-pointer flex-wrap items-baseline gap-x-3 gap-y-1 rounded-2xl px-5 py-4 hover:bg-[#f6f8fb]">
+            <span className="text-[var(--color-ink-3)] transition-transform group-open:rotate-90" aria-hidden>
+              ▸
+            </span>
+            <span className="text-[15px] font-semibold text-[var(--color-ink)]">Edit / add extra information</span>
+            <span className={`text-[12px] ${incomplete.length ? "text-[var(--color-warn-fg)]" : "text-[var(--color-ink-3)]"}`}>
+              {incomplete.length
+                ? `${incomplete.length} of ${invoices.length} invoice(s) are missing something`
+                : `all ${invoices.length} invoice(s) are complete`}
+            </span>
+            <span className="ml-auto text-[12px] font-semibold text-[var(--color-accent)] group-open:hidden">Show</span>
+            <span className="ml-auto hidden text-[12px] font-semibold text-[var(--color-accent)] group-open:inline">Hide</span>
+          </summary>
+          <div className="tablewrap border-t border-[var(--color-line)] p-4">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="bg-[#eef2f7] text-left text-[10px] uppercase tracking-wide text-[var(--color-ink-2)]">
+                  <th className="px-3 py-2">Invoice</th>
+                  <th className="px-3 py-2">Invoice date</th>
+                  <th className="px-3 py-2">BL date</th>
+                  <th className="px-3 py-2">PO no.</th>
+                  <th className="px-3 py-2">Container</th>
+                  <th className="px-3 py-2">Payment terms</th>
+                  <th className="px-3 py-2">Missing</th>
+                  <th className="px-3 py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map((i) => {
+                  const gap = (
+                    <span className="rounded bg-[var(--color-warn-bg)] px-1.5 text-[11px] font-semibold text-[var(--color-warn-fg)]">
+                      missing
+                    </span>
+                  );
+                  return (
+                    <tr
+                      key={i.id}
+                      className={`border-t border-[var(--color-line)] ${i.missingFields.length ? "" : "text-[var(--color-ink-3)]"}`}
+                    >
+                      <td className="px-3 py-2 font-medium">
+                        <Link href={ROUTES.invoice(i.id)} className="link">
+                          {i.invoiceNo ?? "(no number)"}
+                        </Link>
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2">{i.invoiceDate ? day(i.invoiceDate) : gap}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{i.blDate ? day(i.blDate) : gap}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{i.poNo ?? gap}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{i.containerNo ?? gap}</td>
+                      <td className="px-3 py-2">{i.paymentTerms ?? gap}</td>
+                      <td className="px-3 py-2 text-[11px] text-[var(--color-warn-fg)]">
+                        {i.missingFields.length ? (
+                          i.missingFields.map((f) => f.split(" — ")[0]).join(", ")
+                        ) : (
+                          <span className="text-[var(--color-ok-fg)]">complete</span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-right">
+                        <Link href={ROUTES.editInvoice(i.id)} className="btn-ghost btn-sm" title="Edit or add extra information">
+                          ✎ Edit / add extra information
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
     </>
   );
 }

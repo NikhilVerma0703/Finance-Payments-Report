@@ -256,9 +256,11 @@ export function MasterTable({
               {group.customerId && (
                 <div className="flex flex-wrap items-center gap-2">
                   {/* the customer's invoices and what each is missing, with the
-                      form to fill it in — Upload Sheet's Edit, a size under the name */}
+                      form to fill it in — Upload Sheet's Edit, a size under the name.
+                      That list is folded at the foot of the page (29 Oct 2026);
+                      ?open=missing unfolds it. */}
                   <Link
-                    href={`${ROUTES.customer(group.customerId)}#missing`}
+                    href={`${ROUTES.customer(group.customerId)}?open=missing#missing`}
                     className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-[#b9dfd9] bg-white px-2.5 py-1 text-[13px] font-semibold text-[var(--color-accent)] hover:bg-[#e6f4f2]"
                     title="Edit / add extra information: every invoice of this customer, what each is missing, and the form to fill it in"
                   >
