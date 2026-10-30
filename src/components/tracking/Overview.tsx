@@ -69,6 +69,21 @@ export function asAtTime(): string {
   return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata" }).format(new Date());
 }
 
+/** When the figures last changed, as the status bar says it: "today, 10:52
+ *  IST", "29 Oct, 18:05 IST", or with its year when it is not this one. */
+export function updatedWhen(at: Date | string, today: string): string {
+  const d = at instanceof Date ? at : new Date(at);
+  if (Number.isNaN(d.getTime())) return "";
+  const ist = new Date(d.getTime() + 330 * 60_000).toISOString();
+  const day = ist.slice(0, 10);
+  const time = `${ist.slice(11, 16)} IST`;
+  if (day === today) return `today, ${time}`;
+  const dm = `${Number(ist.slice(8, 10))} ${MONTHS_SHORT[Number(ist.slice(5, 7)) - 1]}`;
+  return day.slice(0, 4) === today.slice(0, 4) ? `${dm}, ${time}` : `${dm} ${day.slice(0, 4)}, ${time}`;
+}
+
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 // ---------------------------------------------------------------------------
 // The status bar
 // ---------------------------------------------------------------------------
@@ -80,7 +95,7 @@ export function asAtTime(): string {
  */
 export function OverviewHead({
   today,
-  time,
+  updated,
   invoices,
   customers,
   receiptsThisMonth,
@@ -89,7 +104,9 @@ export function OverviewHead({
   actions,
 }: {
   today: string;
-  time: string;
+  /** When the figures last changed — the last upload or the last edit
+   *  (server/payments/lastChange); null when nothing is recorded yet. */
+  updated: { at: Date | string; source: "upload" | "edit"; fileName: string | null } | null;
   invoices: number;
   customers: number;
   receiptsThisMonth: number;
@@ -108,9 +125,16 @@ export function OverviewHead({
     <div className="dash-cq">
       <div className="dash-rise dash-statusrow">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-brand">
-            <span className="dash-live inline-block h-2 w-2 rounded-full bg-emerald-600 shadow-[0_0_0_3px_rgba(5,150,105,0.18)]" aria-hidden />
-            Live
+          {/* Not "Live": when the figures last changed, and what changed them —
+              the last upload or the last edit (owner, 30 Oct 2026). */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-brand">
+            <span className="inline-block h-2 w-2 rounded-full bg-brand shadow-[0_0_0_3px_rgba(15,76,92,0.15)]" aria-hidden />
+            {updated ? <>Updated {updatedWhen(updated.at, today)}</> : "Nothing uploaded yet"}
+            {updated && (
+              <span className="font-normal normal-case tracking-normal text-gray-500">
+                · {updated.source === "upload" ? `last upload: ${updated.fileName ?? "a sheet"}` : "last change: an edit"}
+              </span>
+            )}
           </div>
           <h1 className="mt-1 text-[26px] font-semibold leading-tight tracking-tight text-gray-900 sm:text-[32px]">
             Payment tracking <span className="font-normal text-gray-500">·</span>{" "}
@@ -118,7 +142,6 @@ export function OverviewHead({
           </h1>
           <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-600">
             <span>
-              As at <span className="tabular font-medium text-gray-900">{time}</span> IST ·{" "}
               <Num tip="invoices the figures below are worked out from: the filters in force, pending only unless every invoice is asked for" className="tabular font-medium text-gray-900">
                 {invoices}
               </Num>{" "}

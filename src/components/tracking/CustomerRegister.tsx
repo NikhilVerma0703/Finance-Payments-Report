@@ -3,8 +3,9 @@
 /**
  * One customer's payment register.
  *
- * A row per invoice carrying its totals — value, received, CN, DN,
- * outstanding, due date and status. Clicking a row opens it: the invoice's
+ * A row per invoice carrying its totals — value and, beside it, what is
+ * still outstanding (owner, 30 Oct 2026), then received, CN, DN, due date and
+ * status. Clicking a row opens it: the invoice's
  * editable fields, and its receipts listed one under another with the derived
  * difference and forex gain/loss beside each. An invoice shows exactly the
  * receipts it has — three for one, four for the next — and "Add receipt"
@@ -268,13 +269,13 @@ export function CustomerRegister({
                 <th className="px-3 py-2">Date</th>
                 <th className="px-3 py-2">Terms</th>
                 <th className="px-3 py-2 text-right">Value{one ? ` (${one})` : ""}</th>
+                <th className="px-3 py-2 text-right">Outstanding</th>
                 <th className="px-3 py-2 text-right">Rate</th>
                 <th className="px-3 py-2 text-right">Value (INR)</th>
                 <th className="px-3 py-2 text-center">Receipts</th>
                 <th className="px-3 py-2 text-right">Received</th>
                 <th className="px-3 py-2 text-right">CN</th>
                 <th className="px-3 py-2 text-right">DN</th>
-                <th className="px-3 py-2 text-right">Outstanding</th>
                 <th className="px-3 py-2 text-right">As per books</th>
                 <th className="px-3 py-2">Due</th>
                 <th className="px-3 py-2">Status</th>
@@ -390,6 +391,9 @@ export function CustomerRegister({
                         {i.paymentTerms ?? "—"}
                       </td>
                       <Calc>{amt(i.customerInvoiceValue, cur)}</Calc>
+                      <Calc tone={`font-semibold ${late ? "text-[var(--color-bad-fg)]" : ""}`}>
+                        {amt(m.calculatedOutstanding, cur)}
+                      </Calc>
                       <Calc tone="text-[var(--color-ink-2)]">
                         {formatRate(i.exchangeRate, "—")}
                       </Calc>
@@ -419,9 +423,6 @@ export function CustomerRegister({
                       </td>
                       <Calc>{m.creditNotes ? amt(m.creditNotes, cur) : ""}</Calc>
                       <Calc>{m.debitNotes ? amt(m.debitNotes, cur) : ""}</Calc>
-                      <Calc tone={`font-semibold ${late ? "text-[var(--color-bad-fg)]" : ""}`}>
-                        {amt(m.calculatedOutstanding, cur)}
-                      </Calc>
                       <Calc tone="text-[var(--color-ink-2)]">{amt(i.booksBalance, cur, "")}</Calc>
                       <td className="whitespace-nowrap px-3 py-2">
                         {i.schedule.dueDate ? (
@@ -644,6 +645,7 @@ export function CustomerRegister({
                   Total
                 </td>
                 <Calc>{one ? amt(totals.value, one) : "mixed"}</Calc>
+                <Calc>{one ? amt(totals.outstanding, one) : "mixed"}</Calc>
                 <td />
                 <Calc title={`${ratesKnown} of ${invoices.length} invoice(s) carry a rate`}>
                   {ratesKnown ? formatMoney(totals.home, "INR", { symbol: false }) : "—"}
@@ -652,7 +654,6 @@ export function CustomerRegister({
                 <Calc>{one ? amt(totals.received, one) : "mixed"}</Calc>
                 <Calc>{one && totals.cn ? amt(totals.cn, one) : ""}</Calc>
                 <Calc>{one && totals.dn ? amt(totals.dn, one) : ""}</Calc>
-                <Calc>{one ? amt(totals.outstanding, one) : "mixed"}</Calc>
                 <td colSpan={3} />
               </tr>
             </tfoot>

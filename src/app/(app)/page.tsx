@@ -48,6 +48,7 @@ import {
   toQuery,
   type TrackingFilters,
 } from "@/server/payments/query";
+import { lastDataChange } from "@/server/payments/lastChange";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +63,11 @@ export default async function DashboardPage({
   // newest payment first unless another order is picked (owner, 24 Oct 2026)
   const csort = isSummarySort(sp.csort) ? sp.csort : DEFAULT_SUMMARY_SORT;
   const cq = typeof sp.cq === "string" ? sp.cq : "";
-  const { invoices, onAccount: allOnAccount, params, today, counts, options, followUps, clientCurrencies } = await loadTracking();
+  const [{ invoices, onAccount: allOnAccount, params, today, counts, options, followUps, clientCurrencies }, updated] = await Promise.all([
+    loadTracking(),
+    // when the figures last changed — the status bar says it in place of "Live"
+    lastDataChange(),
+  ]);
   // the upcoming schedule's window, its own key beside the filters
   const sched: ScheduleWindow = isScheduleWindow(sp.sched) ? (Number(sp.sched) as ScheduleWindow) : 15;
   // what a save on this page did (the follow-up form)
@@ -109,7 +114,7 @@ export default async function DashboardPage({
         <div className="flex flex-col gap-5">
       <OverviewHead
         today={today}
-        time={time}
+        updated={updated}
         invoices={visible.length}
         customers={new Set(visible.map((i) => i.customerId ?? "~none")).size}
         receiptsThisMonth={inView.reduce(
